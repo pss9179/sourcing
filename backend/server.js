@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-    origin: 'http://localhost:8080', // Frontend URL
+    origin: 'http://localhost:8081', // Frontend URL
     credentials: true
 }));
 app.use(express.json());
@@ -208,11 +208,11 @@ app.get('/auth/google', passport.authenticate('google', {
 }));
 
 app.get('/auth/google/callback', 
-    passport.authenticate('google', { failureRedirect: 'http://localhost:8080/login' }),
+    passport.authenticate('google', { failureRedirect: 'http://localhost:8081/login' }),
     (req, res) => {
         // Generate JWT token
         const token = jwt.sign({ userId: req.user.id }, process.env.JWT_SECRET || 'your-secret-key');
-        res.redirect(`http://localhost:8080/?token=${token}`);
+        res.redirect(`http://localhost:8081/?token=${token}`);
     }
 );
 
