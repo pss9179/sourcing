@@ -112,9 +112,23 @@ const VAPI_PRIVATE_KEY = process.env.VAPI_PRIVATE_KEY;
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.GOOGLE_REDIRECT_URI || "/auth/google/callback"
+    callbackURL: process.env.GOOGLE_REDIRECT_URI || "/auth/google/callback",
+    accessType: 'offline',
+    prompt: 'consent'
 }, async (accessToken, refreshToken, profile, done) => {
     try {
+        console.log('\n🔐 Google OAuth Strategy Callback');
+        console.log('   Profile ID:', profile.id);
+        console.log('   Email:', profile.emails[0].value);
+        console.log('   Access Token received:', !!accessToken);
+        console.log('   Refresh Token received:', !!refreshToken);
+        
+        if (!refreshToken) {
+            console.warn('⚠️  WARNING: No refresh token received from Google!');
+            console.warn('   This may happen if user already authorized the app.');
+            console.warn('   User needs to revoke access and re-authorize.');
+        }
+        
         // Check if user exists
         const existingUser = await new Promise((resolve, reject) => {
             db.get("SELECT * FROM users WHERE google_id = ?", [profile.id], (err, row) => {
@@ -124,16 +138,25 @@ passport.use(new GoogleStrategy({
         });
 
         if (existingUser) {
-            // Update tokens
+            console.log('   Updating existing user...');
+            // Update tokens - only update refresh_token if we got one
+            const updateQuery = refreshToken 
+                ? "UPDATE users SET access_token = ?, refresh_token = ? WHERE google_id = ?"
+                : "UPDATE users SET access_token = ? WHERE google_id = ?";
+            const updateParams = refreshToken 
+                ? [accessToken, refreshToken, profile.id]
+                : [accessToken, profile.id];
+                
             await new Promise((resolve, reject) => {
-                db.run("UPDATE users SET access_token = ?, refresh_token = ? WHERE google_id = ?", 
-                    [accessToken, refreshToken, profile.id], (err) => {
-                        if (err) reject(err);
-                        else resolve();
-                    });
+                db.run(updateQuery, updateParams, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
             });
+            console.log('   ✅ User updated');
             return done(null, existingUser);
         } else {
+            console.log('   Creating new user...');
             // Create new user
             const newUser = await new Promise((resolve, reject) => {
                 db.run("INSERT INTO users (google_id, email, name, picture, access_token, refresh_token) VALUES (?, ?, ?, ?, ?, ?)",
@@ -151,6 +174,7 @@ passport.use(new GoogleStrategy({
                         });
                     });
             });
+            console.log('   ✅ New user created');
             return done(null, newUser);
         }
     } catch (error) {
@@ -178,7 +202,9 @@ passport.deserializeUser((id, done) => {
 
 // Auth routes
 app.get('/auth/google', passport.authenticate('google', { 
-    scope: ['profile', 'email', 'https://www.googleapis.com/auth/gmail.send'] 
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/gmail.send'],
+    accessType: 'offline',
+    prompt: 'consent'
 }));
 
 app.get('/auth/google/callback', 
@@ -291,7 +317,83 @@ app.delete('/api/contacts/:id', authenticateToken, (req, res) => {
     });
 });
 
-// Start cadence execution
+// Run workflow directly (new simplified endpoint)
+app.post('/api/workflow/run', authenticateToken, async (req, res) => {
+    const { nodes, connections } = req.body;
+    
+    console.log('\n🚀 RUNNING WORKFLOW');
+    console.log(`   User ID: ${req.user.userId}`);
+    console.log(`   Nodes: ${nodes.length}`);
+    console.log(`   Connections: ${connections.length}`);
+    
+    // Validate workflow
+    const startNode = nodes.find(node => node.type === 'start');
+    if (!startNode) {
+        return res.status(400).json({ error: 'Workflow must have a Start node' });
+    }
+    
+    // Process workflow from start node
+    try {
+        const results = await processWorkflowExecution(nodes, connections, startNode, req.user.userId);
+        
+        res.json({ 
+            success: true,
+            message: `Workflow executed! ${results.emailsSent} email(s) sent successfully.`,
+            details: results
+        });
+    } catch (error) {
+        console.error('❌ Workflow execution error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Execute cadence with current workflow (no save required)
+app.post('/api/cadences/execute', authenticateToken, (req, res) => {
+    const { nodes, connections, contactIds } = req.body;
+    
+    console.log('\n🚀 EXECUTING CADENCE FROM CURRENT WORKFLOW');
+    console.log(`   User ID: ${req.user.userId}`);
+    console.log(`   Nodes: ${nodes.length}`);
+    console.log(`   Connections: ${connections.length}`);
+    console.log(`   Contacts: ${contactIds.length}`);
+    
+    // Validate workflow
+    const startNode = nodes.find(node => node.type === 'start');
+    if (!startNode) {
+        return res.status(400).json({ error: 'Workflow must have a Start node' });
+    }
+    
+    const hasEmailNode = nodes.some(node => 
+        node.type === 'email' || node.type === 'followup-email' || 
+        node.type === 'followup-email2' || node.type === 'new-email'
+    );
+    if (!hasEmailNode) {
+        return res.status(400).json({ error: 'Workflow must have at least one Email node' });
+    }
+    
+    let totalEmailsScheduled = 0;
+    
+    // Schedule emails for each contact
+    contactIds.forEach(contactId => {
+        console.log(`\n📋 Scheduling cadence for contact ${contactId}...`);
+        const emailCount = scheduleCadenceForContact(null, contactId, nodes, connections, startNode, req.user.userId);
+        totalEmailsScheduled += emailCount;
+    });
+    
+    console.log(`\n✅ Total emails scheduled: ${totalEmailsScheduled}`);
+    
+    // Process immediate emails (0-day delays)
+    setTimeout(() => {
+        processEmailsImmediately();
+    }, 1000);
+    
+    res.json({ 
+        message: 'Cadence started successfully',
+        emailsScheduled: totalEmailsScheduled
+    });
+});
+
+// Start cadence execution (for saved cadences)
 app.post('/api/cadences/:id/start', authenticateToken, (req, res) => {
     const cadenceId = req.params.id;
     const { contactIds } = req.body;
@@ -325,31 +427,174 @@ app.post('/api/cadences/:id/start', authenticateToken, (req, res) => {
     });
 });
 
+// New simplified workflow execution
+async function processWorkflowExecution(nodes, connections, startNode, userId) {
+    const results = { emailsSent: 0, errors: [] };
+    
+    // Get user for email sending
+    const user = await new Promise((resolve, reject) => {
+        db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
+    });
+    
+    if (!user || !user.access_token) {
+        throw new Error('User not authenticated with Google');
+    }
+    
+    // Process workflow from start node
+    const visited = new Set();
+    
+    async function processNode(currentNode, delay = 0) {
+        if (visited.has(currentNode.id)) return;
+        visited.add(currentNode.id);
+        
+        // If it's an email node, send the email
+        if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(currentNode.type)) {
+            const config = currentNode.config || {};
+            
+            if (config.to && config.subject && config.template) {
+                try {
+                    console.log(`\n📧 Sending email from node: ${currentNode.title}`);
+                    console.log(`   To: ${config.to}`);
+                    console.log(`   Subject: ${config.subject}`);
+                    console.log(`   Delay: ${delay} days`);
+                    
+                    // If delay is 0, send immediately
+                    if (delay === 0) {
+                        await sendDirectEmail(user, config.to, config.subject, config.template);
+                        results.emailsSent++;
+                    } else {
+                        // Schedule for later (you can implement this if needed)
+                        console.log(`   ⏰ Would schedule for ${delay} days from now`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Failed to send email: ${error.message}`);
+                    results.errors.push(error.message);
+                }
+            }
+        }
+        
+        // Process connected nodes
+        const outgoing = connections.filter(conn => conn.from === currentNode.id);
+        for (const connection of outgoing) {
+            const nextNode = nodes.find(n => n.id === connection.to);
+            if (nextNode) {
+                const nodeDelay = currentNode.config?.delay || 0;
+                await processNode(nextNode, delay + nodeDelay);
+            }
+        }
+    }
+    
+    await processNode(startNode);
+    return results;
+}
+
+// Send email directly using Gmail API
+async function sendDirectEmail(user, to, subject, body) {
+    const { google } = require('googleapis');
+    
+    // Create OAuth2 client
+    const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+    );
+    
+    oauth2Client.setCredentials({
+        access_token: user.access_token,
+        refresh_token: user.refresh_token
+    });
+    
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    // Create email
+    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+    const messageParts = [
+        `From: ${user.email}`,
+        `To: ${to}`,
+        `Subject: ${utf8Subject}`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        body
+    ];
+    const message = messageParts.join('\n');
+    
+    // Encode message
+    const encodedMessage = Buffer.from(message)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+    
+    // Send email
+    const result = await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+            raw: encodedMessage
+        }
+    });
+    
+    console.log(`   ✅ Email sent! Message ID: ${result.data.id}`);
+    return result.data;
+}
+
 // Function to schedule cadence for a contact
 function scheduleCadenceForContact(cadenceId, contactId, nodes, connections, startNode, userId) {
     // Get contact details
     db.get("SELECT * FROM contacts WHERE id = ? AND user_id = ?", [contactId, userId], (err, contact) => {
         if (err || !contact) {
             console.error('Contact not found:', err);
-            return;
+            return 0;
         }
         
-        console.log(`Scheduling cadence for contact: ${contact.name} (${contact.email})`);
+        console.log(`✅ Scheduling cadence for contact: ${contact.name} (${contact.email})`);
         
         // Process the entire workflow starting from the start node
-        processWorkflowFromNode(cadenceId, contactId, nodes, connections, startNode, userId, 0);
+        const emailCount = processWorkflowFromNode(cadenceId, contactId, nodes, connections, startNode, userId, 0);
+        console.log(`   → ${emailCount} emails scheduled for this contact`);
+        return emailCount;
     });
+    
+    // Count emails in the workflow
+    let emailCount = 0;
+    const countEmails = (currentNode, visited = new Set()) => {
+        if (visited.has(currentNode.id)) return;
+        visited.add(currentNode.id);
+        
+        if (currentNode.type === 'email' || currentNode.type === 'followup-email' || 
+            currentNode.type === 'followup-email2' || currentNode.type === 'new-email') {
+            emailCount++;
+        }
+        
+        const outgoing = connections.filter(conn => conn.from === currentNode.id);
+        outgoing.forEach(conn => {
+            const nextNode = nodes.find(n => n.id === conn.to);
+            if (nextNode) countEmails(nextNode, visited);
+        });
+    };
+    countEmails(startNode);
+    return emailCount;
 }
 
 // Recursive function to process workflow from a given node
-function processWorkflowFromNode(cadenceId, contactId, nodes, connections, currentNode, userId, currentDelay) {
+function processWorkflowFromNode(cadenceId, contactId, nodes, connections, currentNode, userId, currentDelay, visited = new Set()) {
+    // Prevent infinite loops
+    if (visited.has(currentNode.id)) return 0;
+    visited.add(currentNode.id);
+    
+    let emailCount = 0;
+    
     // If it's an email node, schedule it
     if (currentNode.type === 'email' || currentNode.type === 'followup-email' || currentNode.type === 'followup-email2' || currentNode.type === 'new-email') {
         const delayDays = currentNode.config?.delay || 0;
         const totalDelay = currentDelay + delayDays;
         
-        console.log(`Scheduling ${currentNode.type} with ${totalDelay} days delay`);
+        console.log(`   📧 Scheduling ${currentNode.type} with ${totalDelay} day(s) delay`);
         scheduleEmailForNode(cadenceId, contactId, currentNode, userId, totalDelay);
+        emailCount++;
     }
     
     // Find all connections from this node
@@ -361,9 +606,11 @@ function processWorkflowFromNode(cadenceId, contactId, nodes, connections, curre
         if (nextNode) {
             const nodeDelay = currentNode.config?.delay || 0;
             const newDelay = currentDelay + nodeDelay;
-            processWorkflowFromNode(cadenceId, contactId, nodes, connections, nextNode, userId, newDelay);
+            emailCount += processWorkflowFromNode(cadenceId, contactId, nodes, connections, nextNode, userId, newDelay, visited);
         }
     });
+    
+    return emailCount;
 }
 
 // Function to schedule email for a specific node
@@ -433,7 +680,6 @@ async function sendEmail(userId, contactId, subject, template) {
         }
         
         try {
-            const nodemailer = require('nodemailer');
             const { google } = require('googleapis');
             
             // Create OAuth2 client
@@ -449,41 +695,51 @@ async function sendEmail(userId, contactId, subject, template) {
                 refresh_token: contact.refresh_token
             });
             
-            // Create transporter using OAuth2
-            const transporter = nodemailer.createTransport({
-                    service: 'gmail',
-                    auth: {
-                    type: 'OAuth2',
-                    user: contact.user_email,
-                    clientId: process.env.GOOGLE_CLIENT_ID,
-                    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                    refreshToken: contact.refresh_token,
-                    accessToken: contact.access_token
-                    }
-                });
+            console.log('📮 Using Gmail API to send cadence email...');
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+            
+            // Create email in RFC 2822 format
+            const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+            const messageParts = [
+                `From: ${contact.user_email}`,
+                `To: ${contact.email}`,
+                `Subject: ${utf8Subject}`,
+                'MIME-Version: 1.0',
+                'Content-Type: text/html; charset=utf-8',
+                '',
+                processedTemplate
+            ];
+            const message = messageParts.join('\n');
+            
+            // Encode message in base64
+            const encodedMessage = Buffer.from(message)
+                .toString('base64')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+            
+            console.log('✉️  Sending via Gmail API...');
                 
-                // Email options
-                const mailOptions = {
-                from: contact.user_email,
-                    to: contact.email,
-                    subject: subject,
-                    html: `<p>${processedTemplate.replace(/\n/g, '<br>')}</p>`,
-                    text: processedTemplate
-                };
+            // Send email
+            const result = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: {
+                    raw: encodedMessage
+                }
+            });
+            console.log('✅ ✅ ✅ CADENCE EMAIL SENT SUCCESSFULLY! ✅ ✅ ✅');
+            console.log('   Message ID:', result.data.id);
                 
-                // Send email
-                const result = await transporter.sendMail(mailOptions);
-                console.log('✅ Email sent successfully:', result.messageId);
-                
-                // Mark as sent
-                db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
+            // Mark as sent
+            db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
                 
             } catch (error) {
-                console.error('❌ Error sending email:', error);
-                console.error('Error details:', error.message);
+                console.error('❌ ❌ ❌ CADENCE EMAIL FAILED! ❌ ❌ ❌');
+                console.error('   Error type:', error.code);
+                console.error('   Error details:', error.message);
                 
-            // If OAuth fails, try to refresh token
-            if (error.code === 'EAUTH' && contact.refresh_token) {
+            // If OAuth fails (401), try to refresh token
+            if (error.code === 401 && contact.refresh_token) {
                 try {
                     console.log('🔄 Attempting to refresh access token...');
                     const { google } = require('googleapis');
@@ -503,30 +759,32 @@ async function sendEmail(userId, contactId, subject, template) {
                     // Update user's access token
                     db.run("UPDATE users SET access_token = ? WHERE id = ?", [credentials.access_token, userId]);
                     
-                    console.log('✅ Access token refreshed, retrying email...');
+                    console.log('✅ Token refreshed, retrying cadence email...');
                     
-                    // Retry sending email with new token
-                    const transporter = nodemailer.createTransport({
-                        service: 'gmail',
-                        auth: {
-                            type: 'OAuth2',
-                            user: contact.user_email,
-                            clientId: process.env.GOOGLE_CLIENT_ID,
-                            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                            refreshToken: contact.refresh_token,
-                            accessToken: credentials.access_token
+                    // Update auth with new token
+                    oauth2Client.setCredentials({
+                        access_token: credentials.access_token,
+                        refresh_token: contact.refresh_token
+                    });
+                    
+                    // Retry sending email with Gmail API
+                    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+                    const retryResult = await gmail.users.messages.send({
+                        userId: 'me',
+                        requestBody: {
+                            raw: encodedMessage
                         }
                     });
                     
-                    const retryResult = await transporter.sendMail(mailOptions);
-                    console.log('✅ Email sent successfully after token refresh:', retryResult.messageId);
+                    console.log('✅ ✅ ✅ CADENCE EMAIL SENT AFTER TOKEN REFRESH! ✅ ✅ ✅');
+                    console.log('   Message ID:', retryResult.data.id);
                     
                     // Mark as sent
                     db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
                     return;
                     
                 } catch (refreshError) {
-                    console.error('❌ Failed to refresh token:', refreshError);
+                    console.error('❌ Failed to refresh token:', refreshError.message);
                 }
             }
             
@@ -727,6 +985,176 @@ app.post('/api/contacts/:id/embed', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error embedding contact:', error);
         res.status(500).json({ error: 'Failed to embed contact' });
+    }
+});
+
+// Send test email endpoint
+app.post('/api/send-test-email', authenticateToken, async (req, res) => {
+    try {
+        const { to, subject, body } = req.body;
+        
+        console.log('\n🧪 TEST EMAIL REQUEST RECEIVED');
+        console.log('   From User ID:', req.user.userId);
+        console.log('   To:', to);
+        console.log('   Subject:', subject);
+        
+        // Get user details
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!user) {
+            console.error('❌ User not found');
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log('✅ User found:', user.email);
+        console.log('   Has access token:', !!user.access_token);
+        console.log('   Has refresh token:', !!user.refresh_token);
+        
+        if (!user.access_token) {
+            console.error('❌ User not authenticated with Gmail');
+            return res.status(401).json({ error: 'Please login with Google to send emails' });
+        }
+        
+        // Setup OAuth2 client and nodemailer (outside try block so accessible for token refresh)
+        const nodemailer = require('nodemailer');
+        const { google } = require('googleapis');
+        
+        console.log('📦 Creating OAuth2 client...');
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+        
+        // Prepare email options (outside try block for retry logic)
+        const mailOptions = {
+            from: user.email,
+            to: to,
+            subject: subject,
+            html: `<p>${body.replace(/\n/g, '<br>')}</p>`,
+            text: body
+        };
+        
+        // Prepare email message (outside try block for retry logic)
+        const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+        const messageParts = [
+            `From: ${user.email}`,
+            `To: ${to}`,
+            `Subject: ${utf8Subject}`,
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=utf-8',
+            '',
+            body
+        ];
+        const message = messageParts.join('\n');
+        
+        // Encode message in base64
+        const encodedMessage = Buffer.from(message)
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+        
+        // Send email using Gmail API (more reliable than SMTP with OAuth)
+        try {
+            console.log('📮 Using Gmail API to send email...');
+            
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+            
+            console.log('✉️  Sending via Gmail API...');
+            console.log('   From:', user.email);
+            console.log('   To:', to);
+            
+            const result = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: {
+                    raw: encodedMessage
+                }
+            });
+            
+            console.log('✅ ✅ ✅ TEST EMAIL SENT SUCCESSFULLY! ✅ ✅ ✅');
+            console.log('   Message ID:', result.data.id);
+            console.log('   Thread ID:', result.data.threadId);
+            console.log('='.repeat(80));
+            
+            res.json({ 
+                success: true, 
+                messageId: result.data.id,
+                message: 'Email sent successfully via Gmail API!' 
+            });
+            
+        } catch (emailError) {
+            console.error('❌ ❌ ❌ EMAIL SENDING FAILED! ❌ ❌ ❌');
+            console.error('   Error type:', emailError.code);
+            console.error('   Error message:', emailError.message);
+            if (emailError.response) {
+                console.error('   Response:', emailError.response.data);
+            }
+            console.error('='.repeat(80));
+            
+            // Try to refresh token if OAuth failed
+            if (emailError.code === 401 && user.refresh_token) {
+                try {
+                    console.log('🔄 Attempting to refresh access token...');
+                    const { credentials } = await oauth2Client.refreshAccessToken();
+                    
+                    // Update user's access token
+                    await new Promise((resolve, reject) => {
+                        db.run("UPDATE users SET access_token = ? WHERE id = ?", 
+                            [credentials.access_token, req.user.userId],
+                            (err) => err ? reject(err) : resolve()
+                        );
+                    });
+                    
+                    console.log('✅ Token refreshed, retrying email send...');
+                    
+                    // Update oauth client with new token
+                    oauth2Client.setCredentials({
+                        access_token: credentials.access_token,
+                        refresh_token: user.refresh_token
+                    });
+                    
+                    // Retry with new token
+                    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+                    const retryResult = await gmail.users.messages.send({
+                        userId: 'me',
+                        requestBody: {
+                            raw: encodedMessage
+                        }
+                    });
+                    
+                    console.log('✅ ✅ ✅ EMAIL SENT AFTER TOKEN REFRESH! ✅ ✅ ✅');
+                    console.log('   Message ID:', retryResult.data.id);
+                    
+                    return res.json({ 
+                        success: true, 
+                        messageId: retryResult.data.id,
+                        message: 'Email sent successfully after token refresh!' 
+                    });
+                } catch (refreshError) {
+                    console.error('❌ Token refresh failed:', refreshError.message);
+                }
+            }
+            
+            res.status(500).json({ 
+                error: 'Failed to send email', 
+                details: emailError.message 
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Error in test email endpoint:', error);
+        res.status(500).json({ error: 'Failed to send test email' });
     }
 });
 

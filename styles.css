@@ -356,27 +356,37 @@ body {
 
 /* 4-side connection points */
 .connection-point.top {
-    top: -6px;
+    top: -8px;
     left: 50%;
     transform: translateX(-50%);
 }
 
 .connection-point.bottom {
-    bottom: -6px;
+    bottom: -8px;
     left: 50%;
     transform: translateX(-50%);
 }
 
 .connection-point.left {
-    left: -6px;
+    left: -8px;
     top: 50%;
     transform: translateY(-50%);
 }
 
 .connection-point.right {
-    right: -6px;
+    right: -8px;
     top: 50%;
     transform: translateY(-50%);
+}
+
+.connection-point.top:hover,
+.connection-point.bottom:hover {
+    transform: translateX(-50%) scale(1.4);
+}
+
+.connection-point.left:hover,
+.connection-point.right:hover {
+    transform: translateY(-50%) scale(1.4);
 }
 
 /* Connection point states */

@@ -52,12 +52,8 @@ class WorkflowBuilder {
         // Config panel
         document.getElementById('closeConfig').addEventListener('click', () => this.closeConfigPanel());
 
-        // Auth buttons
-        document.getElementById('loginBtn').addEventListener('click', () => this.login());
-        document.getElementById('logoutBtn').addEventListener('click', () => this.logout());
-        document.getElementById('saveCadenceBtn').addEventListener('click', () => this.saveCadence());
-        document.getElementById('loadCadencesBtn').addEventListener('click', () => this.loadCadences());
-        document.getElementById('startCadenceBtn').addEventListener('click', () => this.startCadence());
+        // Run Workflow button
+        document.getElementById('runWorkflowBtn').addEventListener('click', () => this.runWorkflow());
 
         // Contact management buttons
         document.getElementById('addContactBtn').addEventListener('click', () => this.showAddContactModal());
@@ -310,54 +306,55 @@ class WorkflowBuilder {
         }
 
         if (this.contacts.length === 0) {
-            alert('Please add contacts first');
+            alert('Please add contacts first. Click "Add Contact" in the left sidebar.');
             return;
         }
 
-        // Check if there are any saved cadences
-        try {
-            const response = await fetch('http://localhost:3000/api/cadences', {
-                headers: {
-                    'Authorization': `Bearer ${this.authToken}`
-                }
-            });
+        // Check if there's a workflow on the canvas
+        if (this.nodes.length === 0) {
+            alert('Please build a workflow first. Drag nodes from the left sidebar.');
+            return;
+        }
 
-            if (!response.ok) {
-                alert('Please login first');
-                return;
-            }
+        // Check if there's a start node
+        const hasStartNode = this.nodes.some(node => node.type === 'start');
+        if (!hasStartNode) {
+            alert('Your workflow needs a Start node!');
+            return;
+        }
 
-            const cadences = await response.json();
-            
-            if (cadences.length === 0) {
-                alert('Please save a cadence first before starting it. Build your workflow and click "Save Cadence".');
-                return;
-            }
-        } catch (error) {
-            alert('Error checking cadences: ' + error.message);
+        // Check if there are any email nodes
+        const hasEmailNode = this.nodes.some(node => 
+            node.type === 'email' || node.type === 'followup-email' || 
+            node.type === 'followup-email2' || node.type === 'new-email'
+        );
+        if (!hasEmailNode) {
+            alert('Your workflow needs at least one Email node!');
             return;
         }
 
         // Show contact selection
         const contactList = this.contacts.map(contact => 
-            `<label><input type="checkbox" value="${contact.id}"> ${contact.name} (${contact.email})</label><br>`
+            `<label style="display: block; margin: 10px 0;">
+                <input type="checkbox" value="${contact.id}"> 
+                ${contact.name} (${contact.email})
+            </label>`
         ).join('');
 
         const modal = document.createElement('div');
         modal.className = 'modal show';
+        modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;';
         modal.innerHTML = `
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3>Select Contacts</h3>
-                    <button class="close-btn" onclick="this.closest('.modal').remove()">×</button>
-                </div>
-                <div class="modal-body">
-                    <form id="contactForm">
-                        ${contactList}
-                        <br><br>
-                        <button type="button" onclick="workflowBuilder.executeCadence()">Start Cadence</button>
-                    </form>
-                </div>
+            <div style="background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+                <h3 style="margin-top: 0;">Select Contacts for Cadence</h3>
+                <form id="contactForm">
+                    ${contactList}
+                    <br>
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button type="button" onclick="this.closest('.modal').remove()" style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">Cancel</button>
+                        <button type="button" onclick="workflowBuilder.executeCadence()" style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Start Sending</button>
+                    </div>
+                </form>
             </div>
         `;
         document.body.appendChild(modal);
@@ -372,50 +369,37 @@ class WorkflowBuilder {
             return;
         }
 
-        // Check if there are any saved cadences
+        console.log('🚀 Starting cadence with current workflow...');
+        console.log('   Nodes:', this.nodes.length);
+        console.log('   Connections:', this.connections.length);
+        console.log('   Contacts:', selectedContacts.length);
+
+        // Send the current workflow directly to start the cadence
         try {
-            const cadencesResponse = await fetch('http://localhost:3000/api/cadences', {
-                headers: {
-                    'Authorization': `Bearer ${this.authToken}`
-                }
-            });
-
-            if (!cadencesResponse.ok) {
-                alert('Please login first');
-                return;
-            }
-
-            const cadences = await cadencesResponse.json();
-            
-            if (cadences.length === 0) {
-                alert('Please save a cadence first before starting it');
-                return;
-            }
-
-            // Use the first saved cadence
-            const cadenceId = cadences[0].id;
-
-            const response = await fetch(`http://localhost:3000/api/cadences/${cadenceId}/start`, {
+            const response = await fetch('http://localhost:3000/api/cadences/execute', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.authToken}`
                 },
                 body: JSON.stringify({
+                    nodes: this.nodes,
+                    connections: this.connections,
                     contactIds: selectedContacts
                 })
             });
 
             if (response.ok) {
-                alert('Cadence started successfully!');
+                const result = await response.json();
+                alert(`✅ Cadence started! ${result.emailsScheduled} emails scheduled.\n\nCheck the server logs to see emails being sent!`);
                 document.querySelector('.modal').remove();
             } else {
                 const errorData = await response.json();
-                alert(`Error starting cadence: ${errorData.error || 'Unknown error'}`);
+                alert(`❌ Error starting cadence: ${errorData.error || 'Unknown error'}`);
             }
         } catch (error) {
             console.error('Error starting cadence:', error);
-            alert('Error starting cadence: ' + error.message);
+            alert('❌ Error starting cadence: ' + error.message);
         }
     }
 
@@ -617,14 +601,22 @@ class WorkflowBuilder {
         nodeElement.style.left = nodeData.x + 'px';
         nodeElement.style.top = nodeData.y + 'px';
 
+        // Check if this is an email node
+        const isEmailNode = ['email', 'followup-email', 'followup-email2', 'new-email'].includes(nodeData.type);
+        
         nodeElement.innerHTML = `
             <div class="node-header">
                 <div class="node-icon">
                     <i class="${this.getNodeIcon(nodeData.type)}"></i>
                 </div>
                 <div class="node-title">${nodeData.title}</div>
+                ${isEmailNode ? `<button class="node-settings-btn" onclick="workflowBuilder.openEmailConfig('${nodeData.id}')" style="background: none; border: none; cursor: pointer; font-size: 16px; position: absolute; right: 5px; top: 5px;">⚙️</button>` : ''}
             </div>
-            <div class="node-description">${nodeData.description}</div>
+            <div class="node-description">
+                ${nodeData.description}
+                ${nodeData.config?.googleAuth ? '<br><span style="color: green; font-size: 11px;">✓ Google Connected</span>' : ''}
+                ${nodeData.config?.to ? `<br><span style="font-size: 11px;">To: ${nodeData.config.to}</span>` : ''}
+            </div>
             <div class="connection-point top" data-side="top"></div>
             <div class="connection-point bottom" data-side="bottom"></div>
             <div class="connection-point left" data-side="left"></div>
@@ -633,7 +625,7 @@ class WorkflowBuilder {
 
         // Add click handler for selection
         nodeElement.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('connection-point')) {
+            if (!e.target.classList.contains('connection-point') && !e.target.classList.contains('node-settings-btn')) {
                 this.selectNode(nodeData);
             }
         });
@@ -641,7 +633,7 @@ class WorkflowBuilder {
         // Add drag functionality
         this.setupNodeDrag(nodeElement, nodeData);
 
-        // Add connection functionality
+        // Add connection functionality with snap-to-connect
         this.setupConnections(nodeElement, nodeData);
 
         nodesContainer.appendChild(nodeElement);
@@ -695,6 +687,9 @@ class WorkflowBuilder {
             
             nodeElement.style.left = nodeData.x + 'px';
             nodeElement.style.top = nodeData.y + 'px';
+            
+            // Redraw all connections when node moves
+            this.redrawConnections();
         });
 
         document.addEventListener('mouseup', () => {
@@ -786,7 +781,22 @@ class WorkflowBuilder {
         const startX = parseFloat(path.getAttribute('d').split(' ')[1]);
         const startY = parseFloat(path.getAttribute('d').split(' ')[2]);
         
-        path.setAttribute('d', `M ${startX} ${startY} L ${mouseX} ${mouseY}`);
+        // Create a curved path for visual appeal
+        const midX = (startX + mouseX) / 2;
+        path.setAttribute('d', `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${mouseY}, ${mouseX} ${mouseY}`);
+        
+        // Highlight valid connection points
+        document.querySelectorAll('.connection-point').forEach(point => {
+            point.classList.remove('highlight');
+        });
+        
+        const element = document.elementFromPoint(event.clientX, event.clientY);
+        if (element && element.classList.contains('connection-point')) {
+            const targetNode = element.closest('.workflow-node');
+            if (targetNode && targetNode.id !== this.connectionStart.node.id) {
+                element.classList.add('highlight');
+            }
+        }
     }
 
     handleMouseUp(event) {
@@ -829,25 +839,45 @@ class WorkflowBuilder {
 
         const fromRect = fromNode.getBoundingClientRect();
         const toRect = toNode.getBoundingClientRect();
-        const canvasRect = document.getElementById('workflowCanvas').getBoundingClientRect();
+        const canvas = document.getElementById('workflowCanvas');
+        const canvasRect = canvas.getBoundingClientRect();
 
         const fromPos = this.getConnectionPosition(fromRect, connection.fromSide, canvasRect);
         const toPos = this.getConnectionPosition(toRect, connection.toSide, canvasRect);
 
-        const midX = (fromPos.x + toPos.x) / 2;
-        const midY = (fromPos.y + toPos.y) / 2;
-        const path = `M ${fromPos.x} ${fromPos.y} Q ${midX} ${midY} ${toPos.x} ${toPos.y}`;
+        // Create a curved path for better visual appeal
+        const controlPoint1X = fromPos.x + (toPos.x - fromPos.x) * 0.5;
+        const controlPoint1Y = fromPos.y;
+        const controlPoint2X = fromPos.x + (toPos.x - fromPos.x) * 0.5;
+        const controlPoint2Y = toPos.y;
+        
+        const path = `M ${fromPos.x} ${fromPos.y} C ${controlPoint1X} ${controlPoint1Y}, ${controlPoint2X} ${controlPoint2Y}, ${toPos.x} ${toPos.y}`;
 
         const svg = document.getElementById('connectionsSvg');
+        
+        // Remove existing connection if it exists
+        const existingPath = svg.querySelector(`[data-connection-id="${connection.id}"]`);
+        if (existingPath) {
+            existingPath.remove();
+        }
+        
         const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         pathElement.setAttribute('d', path);
         pathElement.setAttribute('class', 'connection-line');
-        pathElement.setAttribute('stroke', '#6b7280');
+        pathElement.setAttribute('data-connection-id', connection.id);
+        pathElement.setAttribute('stroke', '#3b82f6');
         pathElement.setAttribute('stroke-width', '2');
         pathElement.setAttribute('fill', 'none');
         pathElement.setAttribute('marker-end', 'url(#arrowhead)');
 
         svg.appendChild(pathElement);
+    }
+    
+    redrawConnections() {
+        // Redraw all connections when nodes move
+        this.connections.forEach(connection => {
+            this.drawConnection(connection);
+        });
     }
 
     getConnectionPosition(rect, side, canvasRect) {
@@ -999,6 +1029,212 @@ class WorkflowBuilder {
 
     refresh() {
         console.log('Refresh');
+    }
+
+    // New Email Configuration
+    openEmailConfig(nodeId) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        // Create modal
+        const modal = document.createElement('div');
+        modal.className = 'email-config-modal';
+        modal.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.7); display: flex; align-items: center; 
+            justify-content: center; z-index: 10000;
+        `;
+        
+        modal.innerHTML = `
+            <div style="background: white; padding: 30px; border-radius: 12px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                <h2 style="margin-top: 0;">📧 Configure Email Node</h2>
+                
+                ${!node.config?.googleAuth ? `
+                    <div style="background: #f0f9ff; border: 2px solid #3b82f6; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin-top: 0;">Step 1: Connect Google Account</h3>
+                        <p>Sign in with Google to send emails through Gmail</p>
+                        <button onclick="workflowBuilder.googleSignIn('${nodeId}')" style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                            🔐 Sign in with Google
+                        </button>
+                    </div>
+                ` : `
+                    <div style="background: #d4edda; border: 2px solid #28a745; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <strong>✅ Google Account Connected</strong><br>
+                        <small>${node.config.googleEmail || 'Connected'}</small>
+                    </div>
+                `}
+                
+                <div style="${!node.config?.googleAuth ? 'opacity: 0.5; pointer-events: none;' : ''}">
+                    <h3>Step 2: Configure Email</h3>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">To (Email Address):</label>
+                        <input type="email" id="emailTo" value="${node.config?.to || ''}" 
+                            style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Subject:</label>
+                        <input type="text" id="emailSubject" value="${node.config?.subject || ''}" 
+                            style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Message:</label>
+                        <textarea id="emailBody" rows="8" 
+                            style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: vertical;">${node.config?.template || ''}</textarea>
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Delay (days after previous node):</label>
+                        <input type="number" id="emailDelay" value="${node.config?.delay || 0}" min="0"
+                            style="width: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
+                    <button onclick="document.querySelector('.email-config-modal').remove()" 
+                        style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">
+                        Cancel
+                    </button>
+                    <button onclick="workflowBuilder.saveEmailConfig('${nodeId}')" 
+                        style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                        Save Configuration
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+
+    googleSignIn(nodeId) {
+        // Open Google OAuth in a new window
+        const authWindow = window.open('http://localhost:3000/auth/google', 'Google Sign In', 'width=500,height=600');
+        
+        // Listen for auth completion
+        const checkAuth = setInterval(() => {
+            try {
+                if (authWindow.closed) {
+                    clearInterval(checkAuth);
+                    // Check if auth was successful by checking for token
+                    const token = localStorage.getItem('authToken');
+                    if (token) {
+                        this.authToken = token;
+                        this.fetchUserAndUpdateNode(nodeId);
+                    }
+                }
+            } catch (e) {
+                // Window is closed or cross-origin
+            }
+        }, 1000);
+    }
+
+    async fetchUserAndUpdateNode(nodeId) {
+        try {
+            const response = await fetch('http://localhost:3000/api/user', {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (response.ok) {
+                const user = await response.json();
+                const node = this.nodes.find(n => n.id === nodeId);
+                if (node) {
+                    node.config = node.config || {};
+                    node.config.googleAuth = true;
+                    node.config.googleEmail = user.email;
+                    
+                    // Refresh the modal
+                    document.querySelector('.email-config-modal').remove();
+                    this.openEmailConfig(nodeId);
+                    
+                    // Update the node display
+                    this.updateCanvas();
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching user:', error);
+        }
+    }
+
+    saveEmailConfig(nodeId) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+        
+        node.config = node.config || {};
+        node.config.to = document.getElementById('emailTo').value;
+        node.config.subject = document.getElementById('emailSubject').value;
+        node.config.template = document.getElementById('emailBody').value;
+        node.config.delay = parseInt(document.getElementById('emailDelay').value) || 0;
+        
+        // Update node description
+        node.description = node.config.subject || 'Email configured';
+        
+        // Close modal
+        document.querySelector('.email-config-modal').remove();
+        
+        // Update canvas
+        this.updateCanvas();
+        
+        alert('✅ Email configuration saved!');
+    }
+
+    async runWorkflow() {
+        // Validate workflow
+        if (this.nodes.length === 0) {
+            alert('Please add nodes to your workflow');
+            return;
+        }
+        
+        const startNode = this.nodes.find(n => n.type === 'start');
+        if (!startNode) {
+            alert('Workflow must have a Start node');
+            return;
+        }
+        
+        const emailNodes = this.nodes.filter(n => 
+            ['email', 'followup-email', 'followup-email2', 'new-email'].includes(n.type)
+        );
+        
+        if (emailNodes.length === 0) {
+            alert('Workflow must have at least one Email node');
+            return;
+        }
+        
+        // Check if all email nodes are configured
+        const unconfiguredNodes = emailNodes.filter(n => !n.config?.googleAuth || !n.config?.to);
+        if (unconfiguredNodes.length > 0) {
+            alert('Please configure all email nodes (click the ⚙️ icon)');
+            return;
+        }
+        
+        // Execute workflow
+        console.log('🚀 Running workflow...');
+        try {
+            const response = await fetch('http://localhost:3000/api/workflow/run', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.authToken}`
+                },
+                body: JSON.stringify({
+                    nodes: this.nodes,
+                    connections: this.connections
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                alert(`✅ Workflow executed successfully!\n\n${result.message}`);
+            } else {
+                const error = await response.json();
+                alert(`❌ Error: ${error.error}`);
+            }
+        } catch (error) {
+            alert(`❌ Error running workflow: ${error.message}`);
+        }
     }
 }
 
