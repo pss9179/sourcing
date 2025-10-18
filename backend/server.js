@@ -149,9 +149,9 @@ passport.use(new GoogleStrategy({
                 
             await new Promise((resolve, reject) => {
                 db.run(updateQuery, updateParams, (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                });
+                        if (err) reject(err);
+                        else resolve();
+                    });
             });
             console.log('   ✅ User updated');
             return done(null, existingUser);
@@ -465,9 +465,24 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
                     if (delay === 0) {
                         await sendDirectEmail(user, config.to, config.subject, config.template);
                         results.emailsSent++;
+                        console.log(`   ✅ Email sent immediately`);
                     } else {
-                        // Schedule for later (you can implement this if needed)
-                        console.log(`   ⏰ Would schedule for ${delay} days from now`);
+                        // Schedule for future (days from now)
+                        const scheduledDate = new Date();
+                        scheduledDate.setDate(scheduledDate.getDate() + delay);
+                        console.log(`   ⏰ Scheduled for ${delay} days from now (${scheduledDate.toLocaleString()})`);
+                        
+                        // Store in a simple queue (you could use a proper job queue in production)
+                        setTimeout(async () => {
+                            try {
+                                await sendDirectEmail(user, config.to, config.subject, config.template);
+                                console.log(`   ✅ Scheduled email sent to ${config.to}`);
+                            } catch (error) {
+                                console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
+                            }
+                        }, delay * 24 * 60 * 60 * 1000); // Convert days to milliseconds
+                        
+                        results.emailsSent++;
                     }
                 } catch (error) {
                     console.error(`❌ Failed to send email: ${error.message}`);
@@ -720,7 +735,7 @@ async function sendEmail(userId, contactId, subject, template) {
             
             console.log('✉️  Sending via Gmail API...');
                 
-            // Send email
+                // Send email
             const result = await gmail.users.messages.send({
                 userId: 'me',
                 requestBody: {
@@ -730,8 +745,8 @@ async function sendEmail(userId, contactId, subject, template) {
             console.log('✅ ✅ ✅ CADENCE EMAIL SENT SUCCESSFULLY! ✅ ✅ ✅');
             console.log('   Message ID:', result.data.id);
                 
-            // Mark as sent
-            db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
+                // Mark as sent
+                db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
                 
             } catch (error) {
                 console.error('❌ ❌ ❌ CADENCE EMAIL FAILED! ❌ ❌ ❌');

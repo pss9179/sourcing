@@ -16,78 +16,18 @@
             </div>
             
             <div class="component-category">
-                <h4>Accounts</h4>
-                <div class="component-item" id="addContactBtn">
-                    <i class="fas fa-user-plus"></i>
-                    <span>Add Contact</span>
-                </div>
-                <div class="component-item" id="viewContactsBtn">
-                    <i class="fas fa-users"></i>
-                    <span>View Contacts</span>
-                </div>
-            </div>
-            
-            <div class="component-category">
-                <h4>Core</h4>
+                <h4>Workflow Components</h4>
                 <div class="component-item" draggable="true" data-type="start">
                     <i class="fas fa-play"></i>
                     <span>Start</span>
                 </div>
-                <div class="component-item" draggable="true" data-type="end">
-                    <i class="fas fa-stop"></i>
-                    <span>End</span>
-                </div>
-            </div>
-            
-            <div class="component-category">
-                <h4>Email Cadences</h4>
                 <div class="component-item" draggable="true" data-type="email">
                     <i class="fas fa-envelope"></i>
                     <span>Email</span>
                 </div>
-                <div class="component-item" draggable="true" data-type="followup-email">
-                    <i class="fas fa-reply"></i>
-                    <span>Follow-up Email</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="followup-email2">
-                    <i class="fas fa-reply-all"></i>
-                    <span>Follow-up Email 2</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="new-email">
-                    <i class="fas fa-envelope-open"></i>
-                    <span>New Email</span>
-                </div>
-            </div>
-            
-            <div class="component-category">
-                <h4>Voice & Communication</h4>
-                <div class="component-item" draggable="true" data-type="voice-call">
-                    <i class="fas fa-phone"></i>
-                    <span>Voice Call</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="voicemail">
-                    <i class="fas fa-microphone"></i>
-                    <span>Voicemail</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="linkedin">
-                    <i class="fab fa-linkedin"></i>
-                    <span>LinkedIn</span>
-                </div>
-            </div>
-            
-            <div class="component-category">
-                <h4>Logic</h4>
-                <div class="component-item" draggable="true" data-type="wait">
-                    <i class="fas fa-clock"></i>
-                    <span>Wait</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="condition">
-                    <i class="fas fa-code-branch"></i>
-                    <span>If / Else</span>
-                </div>
-                <div class="component-item" draggable="true" data-type="task">
-                    <i class="fas fa-tasks"></i>
-                    <span>Task</span>
+                <div class="component-item" draggable="true" data-type="end">
+                    <i class="fas fa-stop"></i>
+                    <span>End</span>
                 </div>
             </div>
         </div>
@@ -101,7 +41,9 @@
                     <span class="status-badge">Draft</span>
                 </div>
             <div class="header-actions">
-                <button class="btn btn-primary" id="runWorkflowBtn">▶️ Run Workflow</button>
+                <button class="btn btn-secondary" id="loginBtn">Login with Google</button>
+                <span id="userEmail" style="display: none; margin-right: 15px; color: #666; font-size: 14px;"></span>
+                <button class="btn btn-primary" id="runWorkflowBtn" style="display: none;">▶️ Start Flow</button>
             </div>
             </div>
             

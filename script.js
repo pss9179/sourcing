@@ -610,12 +610,11 @@ class WorkflowBuilder {
                     <i class="${this.getNodeIcon(nodeData.type)}"></i>
                 </div>
                 <div class="node-title">${nodeData.title}</div>
-                ${isEmailNode ? `<button class="node-settings-btn" onclick="workflowBuilder.openEmailConfig('${nodeData.id}')" style="background: none; border: none; cursor: pointer; font-size: 16px; position: absolute; right: 5px; top: 5px;">⚙️</button>` : ''}
             </div>
             <div class="node-description">
                 ${nodeData.description}
-                ${nodeData.config?.googleAuth ? '<br><span style="color: green; font-size: 11px;">✓ Google Connected</span>' : ''}
                 ${nodeData.config?.to ? `<br><span style="font-size: 11px;">To: ${nodeData.config.to}</span>` : ''}
+                ${isEmailNode ? '<br><span style="font-size: 11px; color: #666;">Click to configure</span>' : ''}
             </div>
             <div class="connection-point top" data-side="top"></div>
             <div class="connection-point bottom" data-side="bottom"></div>
@@ -623,10 +622,14 @@ class WorkflowBuilder {
             <div class="connection-point right" data-side="right"></div>
         `;
 
-        // Add click handler for selection
+        // Add click handler - for email nodes, open config
         nodeElement.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('connection-point') && !e.target.classList.contains('node-settings-btn')) {
-                this.selectNode(nodeData);
+            if (!e.target.classList.contains('connection-point')) {
+                if (isEmailNode) {
+                    this.openEmailConfig(nodeData.id);
+                } else {
+                    this.selectNode(nodeData);
+                }
             }
         });
 
@@ -1047,48 +1050,32 @@ class WorkflowBuilder {
         
         modal.innerHTML = `
             <div style="background: white; padding: 30px; border-radius: 12px; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
-                <h2 style="margin-top: 0;">📧 Configure Email Node</h2>
+                <h2 style="margin-top: 0;">📧 Configure Email</h2>
                 
-                ${!node.config?.googleAuth ? `
-                    <div style="background: #f0f9ff; border: 2px solid #3b82f6; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                        <h3 style="margin-top: 0;">Step 1: Connect Google Account</h3>
-                        <p>Sign in with Google to send emails through Gmail</p>
-                        <button onclick="workflowBuilder.googleSignIn('${nodeId}')" style="padding: 10px 20px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-                            🔐 Sign in with Google
-                        </button>
-                    </div>
-                ` : `
-                    <div style="background: #d4edda; border: 2px solid #28a745; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                        <strong>✅ Google Account Connected</strong><br>
-                        <small>${node.config.googleEmail || 'Connected'}</small>
-                    </div>
-                `}
-                
-                <div style="${!node.config?.googleAuth ? 'opacity: 0.5; pointer-events: none;' : ''}">
-                    <h3>Step 2: Configure Email</h3>
-                    
+                <div style="margin-bottom: 20px;">
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">To (Email Address):</label>
-                        <input type="email" id="emailTo" value="${node.config?.to || ''}" 
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Send To (Email):</label>
+                        <input type="email" id="emailTo" value="${node.config?.to || ''}" placeholder="recipient@example.com"
                             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
                     </div>
                     
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: 600;">Subject:</label>
-                        <input type="text" id="emailSubject" value="${node.config?.subject || ''}" 
+                        <input type="text" id="emailSubject" value="${node.config?.subject || ''}" placeholder="Email subject"
                             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
                     </div>
                     
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: 600;">Message:</label>
-                        <textarea id="emailBody" rows="8" 
+                        <textarea id="emailBody" rows="8" placeholder="Email body..."
                             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: vertical;">${node.config?.template || ''}</textarea>
                     </div>
                     
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Delay (days after previous node):</label>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Send After (days):</label>
                         <input type="number" id="emailDelay" value="${node.config?.delay || 0}" min="0"
                             style="width: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+                        <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">0 = Send immediately, 1+ = Days from now</p>
                     </div>
                 </div>
                 
@@ -1099,7 +1086,7 @@ class WorkflowBuilder {
                     </button>
                     <button onclick="workflowBuilder.saveEmailConfig('${nodeId}')" 
                         style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-                        Save Configuration
+                        Save
                     </button>
                 </div>
             </div>
@@ -1240,6 +1227,8 @@ class WorkflowBuilder {
 
 // Initialize
 let workflowBuilder;
+let currentUser = null;
+
 document.addEventListener('DOMContentLoaded', () => {
     workflowBuilder = new WorkflowBuilder();
     
@@ -1249,8 +1238,55 @@ document.addEventListener('DOMContentLoaded', () => {
     if (token) {
         localStorage.setItem('authToken', token);
         workflowBuilder.authToken = token;
-        workflowBuilder.fetchUser();
+        checkAuth();
         // Clean up URL
         window.history.replaceState({}, document.title, window.location.pathname);
+    } else {
+        // Check if already logged in
+        const savedToken = localStorage.getItem('authToken');
+        if (savedToken) {
+            workflowBuilder.authToken = savedToken;
+            checkAuth();
+        } else {
+            showLoginButton();
+        }
     }
+    
+    // Login button handler
+    document.getElementById('loginBtn').addEventListener('click', () => {
+        window.location.href = 'http://localhost:3000/auth/google';
+    });
 });
+
+async function checkAuth() {
+    try {
+        const response = await fetch('http://localhost:3000/api/user', {
+            headers: {
+                'Authorization': `Bearer ${workflowBuilder.authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            currentUser = await response.json();
+            showLoggedIn(currentUser);
+        } else {
+            showLoginButton();
+        }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        showLoginButton();
+    }
+}
+
+function showLoginButton() {
+    document.getElementById('loginBtn').style.display = 'inline-block';
+    document.getElementById('userEmail').style.display = 'none';
+    document.getElementById('runWorkflowBtn').style.display = 'none';
+}
+
+function showLoggedIn(user) {
+    document.getElementById('loginBtn').style.display = 'none';
+    document.getElementById('userEmail').style.display = 'inline-block';
+    document.getElementById('userEmail').textContent = `Logged in as: ${user.email}`;
+    document.getElementById('runWorkflowBtn').style.display = 'inline-block';
+}
