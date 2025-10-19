@@ -41,11 +41,21 @@
                     <span class="status-badge">Draft</span>
                 </div>
             <div class="header-actions">
-                <button class="btn btn-secondary" id="loginBtn" onclick="window.location.href='http://localhost:3000/auth/google'">Login with Google</button>
+                <button class="btn btn-secondary" id="loginBtn" onclick="window.location.href='http://localhost:3000/auth/google'">
+                    <i class="fab fa-google"></i> Login with Google
+                </button>
                 <span id="userEmail" style="display: none; margin-right: 15px; color: #666; font-size: 14px;"></span>
-                <button class="btn btn-secondary" id="saveCadenceBtn" style="display: none;">💾 Save Cadence</button>
-                <button class="btn btn-secondary" id="loadCadenceBtn" style="display: none;">📂 Load Cadence</button>
-                <button class="btn btn-primary" id="runWorkflowBtn" style="display: none;">▶️ Start Flow</button>
+                <button class="btn btn-tech" id="saveCadenceBtn" style="display: none;">
+                    <i class="fas fa-save"></i>
+                    <span>Save</span>
+                </button>
+                <button class="btn btn-tech" id="loadCadenceBtn" style="display: none;">
+                    <i class="fas fa-folder-open"></i>
+                    <span>Load</span>
+                </button>
+                <button class="btn btn-primary" id="runWorkflowBtn" style="display: none;">
+                    <i class="fas fa-play"></i> Start Flow
+                </button>
             </div>
             </div>
             

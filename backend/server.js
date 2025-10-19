@@ -443,100 +443,131 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
         throw new Error('User not authenticated with Google');
     }
     
-    // Process workflow from start node
+    // Collect all email nodes in order
+    const emailSequence = [];
     const visited = new Set();
     
-    async function processNode(currentNode, cumulativeDelayMs = 0) {
+    function collectEmails(currentNode) {
         if (visited.has(currentNode.id)) return;
         visited.add(currentNode.id);
         
-        // If it's an email node, send the email
+        // If it's an email node, add to sequence
         if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(currentNode.type)) {
             const config = currentNode.config || {};
-            
             if (config.to && config.subject && config.template) {
-                try {
-                    // Calculate delay in milliseconds based on delayType
-                    let delayMs = 0;
-                    
-                    if (config.delayType === 'immediate' || !config.delayType) {
-                        delayMs = 0;
-                    } else if (config.delayType === 'minutes') {
-                        delayMs = (config.delayValue || 0) * 60 * 1000;
-                    } else if (config.delayType === 'days') {
-                        delayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
-                    } else if (config.delayType === 'specific') {
-                        const targetDate = new Date(config.delayValue);
-                        const now = new Date();
-                        delayMs = Math.max(0, targetDate - now);
-                    }
-                    
-                    const totalDelayMs = cumulativeDelayMs + delayMs;
-                    
-                    console.log(`\n📧 Processing email: ${currentNode.title}`);
-                    console.log(`   To: ${config.to}`);
-                    console.log(`   Subject: ${config.subject}`);
-                    console.log(`   Delay Type: ${config.delayType || 'immediate'}`);
-                    console.log(`   Delay: ${totalDelayMs}ms (${totalDelayMs / 1000 / 60} minutes)`);
-                    
-                    // If delay is 0, send immediately
-                    if (totalDelayMs === 0) {
-                        await sendDirectEmail(user, config.to, config.subject, config.template);
-                        results.emailsSent++;
-                        console.log(`   ✅ Email sent immediately`);
-                    } else {
-                        // Schedule for future
-                        const scheduledDate = new Date(Date.now() + totalDelayMs);
-                        console.log(`   ⏰ Scheduled for ${scheduledDate.toLocaleString()}`);
-                        
-                        setTimeout(async () => {
-                            try {
-                                await sendDirectEmail(user, config.to, config.subject, config.template);
-                                console.log(`   ✅ Scheduled email sent to ${config.to}`);
-                            } catch (error) {
-                                console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
-                            }
-                        }, totalDelayMs);
-                        
-                        results.emailsSent++;
-                    }
-                } catch (error) {
-                    console.error(`❌ Failed to send email: ${error.message}`);
-                    results.errors.push(error.message);
+                // Calculate delay in milliseconds
+                let delayMs = 0;
+                if (config.delayType === 'immediate' || !config.delayType) {
+                    delayMs = 0;
+                } else if (config.delayType === 'minutes') {
+                    delayMs = (config.delayValue || 0) * 60 * 1000;
+                } else if (config.delayType === 'days') {
+                    delayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
+                } else if (config.delayType === 'specific') {
+                    const targetDate = new Date(config.delayValue);
+                    const now = new Date();
+                    delayMs = Math.max(0, targetDate - now);
                 }
+                
+                emailSequence.push({
+                    node: currentNode,
+                    to: config.to,
+                    subject: config.subject,
+                    body: config.template,
+                    delayMs: delayMs
+                });
             }
         }
         
-        // Process connected nodes with cumulative delay
+        // Process connected nodes
         const outgoing = connections.filter(conn => conn.from === currentNode.id);
         for (const connection of outgoing) {
             const nextNode = nodes.find(n => n.id === connection.to);
             if (nextNode) {
-                // Calculate this node's delay
-                let nodeDelayMs = 0;
-                const config = currentNode.config || {};
-                
-                if (config.delayType === 'minutes') {
-                    nodeDelayMs = (config.delayValue || 0) * 60 * 1000;
-                } else if (config.delayType === 'days') {
-                    nodeDelayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
-                } else if (config.delayType === 'specific') {
-                    const targetDate = new Date(config.delayValue);
-                    const now = new Date();
-                    nodeDelayMs = Math.max(0, targetDate - now);
-                }
-                
-                await processNode(nextNode, cumulativeDelayMs + nodeDelayMs);
+                collectEmails(nextNode);
             }
         }
     }
     
-    await processNode(startNode);
+    collectEmails(startNode);
+    console.log(`📧 Found ${emailSequence.length} emails in sequence`);
+    
+    // Generate a fake Message-ID for threading (will be used for ALL emails)
+    // Format: <uniqueId@mail.gmail.com>
+    const fakeMessageId = `<${Date.now()}.${Math.random().toString(36).substring(7)}@mail.gmail.com>`;
+    console.log(`📧 Generated shared Message-ID for threading: ${fakeMessageId}`);
+    
+    // Send emails in sequence with threading
+    let threadId = null;
+    
+    // ALWAYS send the first email immediately to establish thread
+    if (emailSequence.length > 0) {
+        const firstEmail = emailSequence[0];
+        console.log(`\n📧 Email 1/${emailSequence.length}: ${firstEmail.subject}`);
+        console.log(`   To: ${firstEmail.to}`);
+        console.log(`   Delay: ${firstEmail.delayMs}ms (immediate - establishing thread)`);
+        console.log(`   Thread ID: New thread`);
+        console.log(`   Using Message-ID: ${fakeMessageId}`);
+        
+        try {
+            const result = await sendDirectEmail(user, firstEmail.to, firstEmail.subject, firstEmail.body, null, fakeMessageId);
+            threadId = result.threadId;
+            console.log(`   ✅ Thread established: ${threadId}`);
+            results.emailsSent++;
+        } catch (error) {
+            console.error(`   ❌ Failed to send first email: ${error.message}`);
+            results.errors.push(error.message);
+            return results; // Can't continue without thread
+        }
+    }
+    
+    // Send remaining emails with proper threading using the SAME fake Message-ID
+    for (let i = 1; i < emailSequence.length; i++) {
+        const email = emailSequence[i];
+        
+        console.log(`\n📧 Email ${i + 1}/${emailSequence.length}: ${email.subject}`);
+        console.log(`   To: ${email.to}`);
+        console.log(`   Delay: ${email.delayMs}ms`);
+        console.log(`   Thread ID: ${threadId}`);
+        console.log(`   Using same Message-ID: ${fakeMessageId}`);
+        
+        // Capture threadId and messageId in the closure
+        const capturedThreadId = threadId;
+        const capturedMessageId = fakeMessageId; // Use the SAME fake Message-ID for all emails!
+        
+        if (email.delayMs === 0) {
+            // Send immediately
+            try {
+                const result = await sendDirectEmail(user, email.to, email.subject, email.body, capturedThreadId, capturedMessageId);
+                console.log(`   ✅ Email sent in thread: ${result.threadId}`);
+                results.emailsSent++;
+            } catch (error) {
+                console.error(`   ❌ Failed to send email: ${error.message}`);
+                results.errors.push(error.message);
+            }
+        } else {
+            // Schedule for later
+            const scheduledDate = new Date(Date.now() + email.delayMs);
+            console.log(`   ⏰ Scheduling for ${scheduledDate.toLocaleString()}`);
+            
+            setTimeout(async () => {
+                try {
+                    await sendDirectEmail(user, email.to, email.subject, email.body, capturedThreadId, capturedMessageId);
+                    console.log(`   ✅ Scheduled email sent to ${email.to} in thread ${capturedThreadId}`);
+                } catch (error) {
+                    console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
+                }
+            }, email.delayMs);
+            
+            results.emailsSent++;
+        }
+    }
+    
     return results;
 }
 
 // Send email directly using Gmail API
-async function sendDirectEmail(user, to, subject, body) {
+async function sendDirectEmail(user, to, subject, body, threadId = null, inReplyToMessageId = null) {
     const { google } = require('googleapis');
     
     // Create OAuth2 client
@@ -553,18 +584,30 @@ async function sendDirectEmail(user, to, subject, body) {
     
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
-    // Create email
-    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+    // Add "Re:" prefix for follow-up emails
+    const emailSubject = (threadId && !subject.startsWith('Re:')) ? `Re: ${subject}` : subject;
+    
+    // Create email with proper MIME format
+    const utf8Subject = `=?utf-8?B?${Buffer.from(emailSubject).toString('base64')}?=`;
     const messageParts = [
         `From: ${user.email}`,
         `To: ${to}`,
         `Subject: ${utf8Subject}`,
         'MIME-Version: 1.0',
-        'Content-Type: text/html; charset=utf-8',
-        '',
-        body
+        'Content-Type: text/html; charset=utf-8'
     ];
-    const message = messageParts.join('\n');
+    
+    // ALWAYS add In-Reply-To and References when we have a fake Message-ID
+    // This makes ALL emails (including the first) reply to the same fake message
+    if (inReplyToMessageId) {
+        messageParts.push(`In-Reply-To: ${inReplyToMessageId}`);
+        messageParts.push(`References: ${inReplyToMessageId}`);
+        console.log(`   📎 Adding threading headers: In-Reply-To: ${inReplyToMessageId}`);
+    }
+    
+    messageParts.push('');
+    messageParts.push(body);
+    const message = messageParts.join('\r\n'); // CRITICAL: Use CRLF for MIME
     
     // Encode message
     const encodedMessage = Buffer.from(message)
@@ -573,16 +616,31 @@ async function sendDirectEmail(user, to, subject, body) {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
     
-    // Send email
+    // Send email with threadId if provided
+    const requestBody = { raw: encodedMessage };
+    if (threadId) {
+        requestBody.threadId = threadId;
+        console.log(`   🧵 Continuing thread: ${threadId}`);
+    }
+    
     const result = await gmail.users.messages.send({
         userId: 'me',
-        requestBody: {
-            raw: encodedMessage
-        }
+        requestBody: requestBody
     });
     
-    console.log(`   ✅ Email sent! Message ID: ${result.data.id}`);
-    return result.data;
+    console.log(`   ✅ Email sent! Message ID: ${result.data.id}, Thread ID: ${result.data.threadId}`);
+    
+    // Generate the SMTP Message-ID in Gmail's format
+    // Gmail uses a specific format based on the message ID
+    const messageId = `<${result.data.id}@mail.gmail.com>`;
+    
+    console.log(`   📧 SMTP Message-ID: ${messageId}`);
+    
+    return { 
+        id: result.data.id, 
+        threadId: result.data.threadId,
+        messageId: messageId
+    };
 }
 
 // Function to schedule cadence for a contact

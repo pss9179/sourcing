@@ -610,7 +610,7 @@ class WorkflowBuilder {
                 if (isEmailNode) {
                     this.openEmailConfig(nodeData.id);
                 } else {
-                    this.selectNode(nodeData);
+                this.selectNode(nodeData);
                 }
             }
         });
@@ -1321,7 +1321,17 @@ class WorkflowBuilder {
         const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
         
         if (savedCadences.length === 0) {
-            alert('No saved cadences found. Create and save a cadence first!');
+            // Show styled message instead of alert
+            const message = document.createElement('div');
+            message.style.cssText = `
+                position: fixed; top: 20px; right: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white; padding: 20px 30px; border-radius: 12px; z-index: 10000; font-weight: 600;
+                box-shadow: 0 8px 32px rgba(102, 126, 234, 0.4); animation: slideIn 0.3s ease;
+                font-size: 15px; display: flex; align-items: center; gap: 12px;
+            `;
+            message.innerHTML = `<i class="fas fa-info-circle"></i> <span>No saved cadences yet. Create and save one first!</span>`;
+            document.body.appendChild(message);
+            setTimeout(() => message.remove(), 3000);
             return;
         }
         
@@ -1329,53 +1339,174 @@ class WorkflowBuilder {
         const modal = document.createElement('div');
         modal.style.cssText = `
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.7); display: flex; align-items: center;
-            justify-content: center; z-index: 10000;
+            background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center; z-index: 10000;
+            animation: fadeIn 0.2s ease;
         `;
+        modal.className = 'cadence-modal-overlay';
         
         const cadenceList = savedCadences.map((cadence, index) => `
-            <div style="padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; cursor: pointer; background: white; transition: all 0.2s;"
-                 onmouseover="this.style.background='#F3F4F6'" onmouseout="this.style.background='white'"
-                 onclick="workflowBuilder.loadCadenceByIndex(${index}); document.querySelector('.cadence-load-modal').remove();">
-                <div style="font-weight: 600; font-size: 16px; margin-bottom: 5px;">${cadence.name}</div>
-                <div style="font-size: 12px; color: #666;">
-                    ${cadence.nodes.length} nodes • Saved ${new Date(cadence.savedAt).toLocaleDateString()}
+            <div class="cadence-card" data-cadence-index="${index}" style="
+                padding: 20px; 
+                border: 2px solid transparent;
+                border-radius: 12px; 
+                margin-bottom: 12px; 
+                cursor: pointer; 
+                background: linear-gradient(white, white) padding-box,
+                            linear-gradient(135deg, #667eea 0%, #764ba2 100%) border-box;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                position: relative;
+                overflow: hidden;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            ">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <div style="
+                        width: 48px; height: 48px; border-radius: 12px;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        display: flex; align-items: center; justify-content: center;
+                        font-size: 20px; color: white; flex-shrink: 0;
+                    ">
+                        <i class="fas fa-project-diagram"></i>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 700; font-size: 17px; color: #1f2937; margin-bottom: 6px;">${cadence.name}</div>
+                        <div style="font-size: 13px; color: #6b7280; display: flex; align-items: center; gap: 12px;">
+                            <span><i class="fas fa-circle-nodes" style="margin-right: 4px;"></i>${cadence.nodes.length} nodes</span>
+                            <span><i class="fas fa-calendar" style="margin-right: 4px;"></i>${new Date(cadence.savedAt).toLocaleDateString()}</span>
+                        </div>
+                    </div>
+                    <i class="fas fa-chevron-right" style="color: #9ca3af; font-size: 18px;"></i>
                 </div>
             </div>
         `).join('');
         
         modal.innerHTML = `
-            <div class="cadence-load-modal" style="background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
-                <h2 style="margin-top: 0;">📂 Load Cadence</h2>
-                <div style="margin: 20px 0;">
-                    ${cadenceList}
-                </div>
-                <div style="margin-top: 20px; text-align: right;">
-                    <button onclick="document.querySelector('.cadence-load-modal').parentElement.remove()"
-                        style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">
-                        Cancel
+            <div class="cadence-load-modal" style="
+                background: white; 
+                padding: 40px; 
+                border-radius: 20px; 
+                max-width: 600px; 
+                width: 90%; 
+                max-height: 80vh; 
+                overflow-y: auto;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                position: relative;
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                    <div>
+                        <h2 style="margin: 0; font-size: 28px; font-weight: 800; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                            Load Cadence
+                        </h2>
+                        <p style="margin: 8px 0 0 0; color: #6b7280; font-size: 14px;">Select a saved workflow to continue</p>
+                    </div>
+                    <button class="close-modal-btn" style="
+                        width: 40px; height: 40px; border: none; background: #f3f4f6; 
+                        border-radius: 10px; cursor: pointer; font-size: 20px; color: #6b7280;
+                        transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+                    ">
+                        <i class="fas fa-times"></i>
                     </button>
+                </div>
+                <div class="cadence-list-container" style="margin: 0;">
+                    ${cadenceList}
                 </div>
             </div>
         `;
         
         document.body.appendChild(modal);
+        
+        // Prevent modal content from closing when clicked
+        const modalContent = modal.querySelector('.cadence-load-modal');
+        modalContent.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        
+        // Add event listeners after modal is in DOM
+        const closeBtn = modal.querySelector('.close-modal-btn');
+        closeBtn.addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+        
+        closeBtn.addEventListener('mouseover', () => {
+            closeBtn.style.background = '#e5e7eb';
+            closeBtn.style.color = '#374151';
+        });
+        
+        closeBtn.addEventListener('mouseout', () => {
+            closeBtn.style.background = '#f3f4f6';
+            closeBtn.style.color = '#6b7280';
+        });
+        
+        // Add click listeners to each cadence card
+        const cadenceCards = modal.querySelectorAll('.cadence-card');
+        console.log('📋 Found cadence cards:', cadenceCards.length);
+        
+        cadenceCards.forEach((card, idx) => {
+            console.log(`📋 Setting up card ${idx}, index: ${card.dataset.cadenceIndex}`);
+            
+            card.addEventListener('mouseover', () => {
+                card.style.transform = 'translateY(-4px) scale(1.02)';
+                card.style.boxShadow = '0 12px 24px rgba(102, 126, 234, 0.3)';
+            });
+            
+            card.addEventListener('mouseout', () => {
+                card.style.transform = 'translateY(0) scale(1)';
+                card.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+            });
+            
+            card.addEventListener('click', (e) => {
+                console.log('🖱️ Card clicked!', e.target);
+                const index = parseInt(card.dataset.cadenceIndex);
+                console.log('📋 Loading cadence at index:', index);
+                this.loadCadenceByIndex(index);
+                document.body.removeChild(modal);
+            });
+        });
+        
+        // Close modal when clicking backdrop
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                document.body.removeChild(modal);
+            }
+        });
     }
 
     loadCadenceByIndex(index) {
+        console.log('🔄 loadCadenceByIndex called with index:', index);
         const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
+        console.log('📋 Total saved cadences:', savedCadences.length);
         const cadence = savedCadences[index];
+        console.log('📋 Loading cadence:', cadence);
         
-        if (!cadence) return;
+        if (!cadence) {
+            console.error('❌ No cadence found at index:', index);
+            return;
+        }
         
         // Clear current workflow
+        const svg = document.getElementById('connectionsSvg');
+        svg.innerHTML = `
+            <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                        refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+                </marker>
+            </defs>
+        `;
         document.getElementById('workflowNodes').innerHTML = '';
         
         // Load nodes and connections
         this.nodes = cadence.nodes;
         this.connections = cadence.connections;
         
-        // Render all nodes
+        // Update node counter to avoid ID conflicts
+        const maxCounter = this.nodes.reduce((max, node) => {
+            const match = node.id.match(/node-(\d+)/);
+            return match ? Math.max(max, parseInt(match[1])) : max;
+        }, 0);
+        this.nodeCounter = maxCounter;
+        
+        // Render all nodes with proper event listeners
         this.nodes.forEach(node => this.renderNode(node));
         
         // Redraw all connections
@@ -1386,7 +1517,7 @@ class WorkflowBuilder {
         message.style.cssText = `
             position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
             padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); animation: slideIn 0.3s ease;
         `;
         message.textContent = `✅ Cadence "${cadence.name}" loaded!`;
         document.body.appendChild(message);
