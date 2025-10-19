@@ -1,0 +1,58 @@
+/* CadenceFlow LinkedIn Button Styles */
+
+.cadenceflow-button {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    z-index: 9999;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 50px;
+    padding: 15px 25px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.cadenceflow-button:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 32px rgba(102, 126, 234, 0.6);
+}
+
+.cadenceflow-button:active {
+    transform: translateY(-1px);
+}
+
+.cadenceflow-button.loading {
+    opacity: 0.8;
+    cursor: wait;
+}
+
+.cadenceflow-button svg {
+    flex-shrink: 0;
+}
+
+/* Animation for button appearance */
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.cadenceflow-button {
+    animation: slideInUp 0.4s ease-out;
+}
+
+

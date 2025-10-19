@@ -19,7 +19,14 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-    origin: 'http://localhost:8081', // Frontend URL
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests) or from allowed origins
+        if (!origin || origin === 'http://localhost:8081' || origin.startsWith('chrome-extension://')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
 }));
 app.use(express.json());
@@ -67,10 +74,20 @@ db.serialize(() => {
         email TEXT,
         name TEXT,
         company TEXT,
+        title TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        linkedin_url TEXT,
         status TEXT DEFAULT 'active',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id)
     )`);
+    
+    // Add new columns to existing contacts table if they don't exist
+    db.run(`ALTER TABLE contacts ADD COLUMN title TEXT`, () => {});
+    db.run(`ALTER TABLE contacts ADD COLUMN first_name TEXT`, () => {});
+    db.run(`ALTER TABLE contacts ADD COLUMN last_name TEXT`, () => {});
+    db.run(`ALTER TABLE contacts ADD COLUMN linkedin_url TEXT`, () => {});
 
     // Email queue table
     db.run(`CREATE TABLE IF NOT EXISTS email_queue (
@@ -278,10 +295,11 @@ app.get('/api/cadences', authenticateToken, (req, res) => {
 
 // Add contact
 app.post('/api/contacts', authenticateToken, (req, res) => {
-    const { email, name, company } = req.body;
+    const { email, name, company, title, firstName, lastName, linkedinUrl } = req.body;
     
-    db.run("INSERT INTO contacts (user_id, email, name, company) VALUES (?, ?, ?, ?)",
-        [req.user.userId, email, name, company],
+    db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
         function(err) {
             if (err) {
                 res.status(500).json({ error: 'Failed to add contact' });
@@ -315,6 +333,121 @@ app.delete('/api/contacts/:id', authenticateToken, (req, res) => {
             res.json({ message: 'Contact deleted successfully' });
         }
     });
+});
+
+// Find email using Apollo.io API
+app.post('/api/find-email', authenticateToken, async (req, res) => {
+    const { firstName, lastName, company, domain } = req.body;
+    
+    try {
+        // Try Apollo.io API first
+        if (process.env.APOLLO_API_KEY && process.env.APOLLO_API_KEY !== 'your_apollo_api_key_here') {
+            console.log(`🔍 Looking up email for ${firstName} ${lastName} at ${company}`);
+            
+            const apolloResponse = await axios.post('https://api.apollo.io/v1/people/match', {
+                first_name: firstName,
+                last_name: lastName,
+                organization_name: company,
+                domain: domain
+            }, {
+                headers: {
+                    'X-Api-Key': process.env.APOLLO_API_KEY,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (apolloResponse.data && apolloResponse.data.person && apolloResponse.data.person.email) {
+                console.log(`✅ Found email via Apollo: ${apolloResponse.data.person.email}`);
+                return res.json({
+                    email: apolloResponse.data.person.email,
+                    source: 'apollo',
+                    confidence: 'high'
+                });
+            }
+        }
+        
+        // Fallback: Generate educated guesses based on common patterns
+        if (domain) {
+            const patterns = [
+                `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${domain}`,
+                `${firstName.toLowerCase()}${lastName.toLowerCase()}@${domain}`,
+                `${firstName.toLowerCase().charAt(0)}${lastName.toLowerCase()}@${domain}`,
+                `${firstName.toLowerCase()}@${domain}`
+            ];
+            
+            console.log(`💡 Apollo not configured. Suggesting email patterns for ${domain}`);
+            return res.json({
+                suggestions: patterns,
+                source: 'pattern',
+                confidence: 'low',
+                message: 'Apollo API not configured. These are educated guesses.'
+            });
+        }
+        
+        res.json({ 
+            email: null, 
+            message: 'Could not find email. Please enter manually.' 
+        });
+        
+    } catch (error) {
+        console.error('Error finding email:', error.response?.data || error.message);
+        res.status(500).json({ 
+            error: 'Failed to find email',
+            details: error.response?.data?.message || error.message 
+        });
+    }
+});
+
+// Add contact to a cadence
+app.post('/api/cadences/:id/add-contact', authenticateToken, async (req, res) => {
+    const cadenceId = req.params.id;
+    const { contactId } = req.body;
+    
+    try {
+        // Get the cadence
+        const cadence = await new Promise((resolve, reject) => {
+            db.get('SELECT * FROM cadences WHERE id = ? AND user_id = ?', [cadenceId, req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!cadence) {
+            return res.status(404).json({ error: 'Cadence not found' });
+        }
+        
+        // Get the contact
+        const contact = await new Promise((resolve, reject) => {
+            db.get('SELECT * FROM contacts WHERE id = ? AND user_id = ?', [contactId, req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!contact) {
+            return res.status(404).json({ error: 'Contact not found' });
+        }
+        
+        // Parse cadence workflow
+        const nodes = JSON.parse(cadence.nodes);
+        const connections = JSON.parse(cadence.connections);
+        
+        // Find the start node
+        const startNode = nodes.find(n => n.type === 'start');
+        
+        // Schedule emails from the cadence with template replacement
+        await processWorkflowExecution(nodes, connections, startNode, req.user.userId, contact);
+        
+        res.json({ 
+            message: 'Contact added to cadence successfully',
+            contact: contact.name,
+            cadence: cadence.name
+        });
+        
+    } catch (error) {
+        console.error('Error adding contact to cadence:', error);
+        res.status(500).json({ error: 'Failed to add contact to cadence' });
+    }
 });
 
 // Run workflow directly (new simplified endpoint)
@@ -427,8 +560,29 @@ app.post('/api/cadences/:id/start', authenticateToken, (req, res) => {
     });
 });
 
+// Template variable replacement function
+function replaceTemplateVariables(text, contact) {
+    if (!text || !contact) return text;
+    
+    const variables = {
+        '{{firstName}}': contact.first_name || contact.name?.split(' ')[0] || '',
+        '{{lastName}}': contact.last_name || contact.name?.split(' ').slice(1).join(' ') || '',
+        '{{fullName}}': contact.name || '',
+        '{{company}}': contact.company || '',
+        '{{title}}': contact.title || '',
+        '{{email}}': contact.email || ''
+    };
+    
+    let result = text;
+    for (const [variable, value] of Object.entries(variables)) {
+        result = result.replace(new RegExp(variable, 'g'), value);
+    }
+    
+    return result;
+}
+
 // New simplified workflow execution
-async function processWorkflowExecution(nodes, connections, startNode, userId) {
+async function processWorkflowExecution(nodes, connections, startNode, userId, contact = null) {
     const results = { emailsSent: 0, errors: [] };
     
     // Get user for email sending
@@ -469,11 +623,16 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
                     delayMs = Math.max(0, targetDate - now);
                 }
                 
+                // Apply template variable replacement if contact is provided
+                const processedSubject = contact ? replaceTemplateVariables(config.subject, contact) : config.subject;
+                const processedBody = contact ? replaceTemplateVariables(config.template, contact) : config.template;
+                const processedTo = contact ? contact.email : config.to;
+                
                 emailSequence.push({
                     node: currentNode,
-                    to: config.to,
-                    subject: config.subject,
-                    body: config.template,
+                    to: processedTo,
+                    subject: processedSubject,
+                    body: processedBody,
                     delayMs: delayMs
                 });
             }

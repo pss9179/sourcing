@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generate CadenceFlow Icons</title>
+</head>
+<body>
+    <h2>Right-click each canvas and "Save image as" to save the icons</h2>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+        <div>
+            <p>icon16.png</p>
+            <canvas id="icon16" width="16" height="16" style="border: 1px solid #ccc; image-rendering: pixelated; width: 160px; height: 160px;"></canvas>
+        </div>
+        <div>
+            <p>icon48.png</p>
+            <canvas id="icon48" width="48" height="48" style="border: 1px solid #ccc;"></canvas>
+        </div>
+        <div>
+            <p>icon128.png</p>
+            <canvas id="icon128" width="128" height="128" style="border: 1px solid #ccc;"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        function drawIcon(canvas) {
+            const ctx = canvas.getContext('2d');
+            const size = canvas.width;
+            
+            // Create gradient background
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#667eea');
+            gradient.addColorStop(1, '#764ba2');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+            
+            // Draw envelope icon
+            ctx.fillStyle = 'white';
+            const padding = size * 0.2;
+            const envWidth = size - (padding * 2);
+            const envHeight = envWidth * 0.7;
+            const startX = padding;
+            const startY = (size - envHeight) / 2;
+            
+            // Envelope body
+            ctx.fillRect(startX, startY, envWidth, envHeight);
+            
+            // Envelope flap
+            ctx.fillStyle = '#667eea';
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(startX + envWidth / 2, startY + envHeight / 2);
+            ctx.lineTo(startX + envWidth, startY);
+            ctx.closePath();
+            ctx.fill();
+        }
+        
+        drawIcon(document.getElementById('icon16'));
+        drawIcon(document.getElementById('icon48'));
+        drawIcon(document.getElementById('icon128'));
+    </script>
+</body>
+</html>
+
+

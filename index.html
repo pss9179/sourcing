@@ -41,7 +41,7 @@
                     <span class="status-badge">Draft</span>
                 </div>
             <div class="header-actions">
-                <button class="btn btn-secondary" id="loginBtn" onclick="window.location.href='http://localhost:3000/auth/google'">
+                <button class="btn btn-secondary" id="loginBtn">
                     <i class="fab fa-google"></i> Login with Google
                 </button>
                 <span id="userEmail" style="display: none; margin-right: 15px; color: #666; font-size: 14px;"></span>
@@ -84,7 +84,7 @@
                         <p>1. <strong>Click and drag</strong> from any blue dot on a node</p>
                         <p>2. <strong>Drag to any blue dot</strong> on another node to connect them</p>
                         <p>3. <strong>Release</strong> to create the connection</p>
-                        <button onclick="this.parentElement.parentElement.style.display='none'">Got it!</button>
+                        <button id="closeInstructions">Got it!</button>
                     </div>
                 </div>
                 
@@ -140,6 +140,21 @@
         // After script.js loads, set up auth UI
         (function() {
             const token = window._authToken;
+            
+            // Add event listeners for buttons
+            const loginBtn = document.getElementById('loginBtn');
+            if (loginBtn) {
+                loginBtn.addEventListener('click', () => {
+                    window.location.href = 'http://localhost:3000/auth/google';
+                });
+            }
+            
+            const closeInstructionsBtn = document.getElementById('closeInstructions');
+            if (closeInstructionsBtn) {
+                closeInstructionsBtn.addEventListener('click', () => {
+                    document.getElementById('connectionInstructions').style.display = 'none';
+                });
+            }
             
             if (token) {
                 // Verify token

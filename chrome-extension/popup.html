@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CadenceFlow - Add to Cadence</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 400px;
+            min-height: 300px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h2 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 20px;
+        }
+
+        .section {
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 10px;
+        }
+
+        .profile-info {
+            background: white;
+            border-radius: 12px;
+            padding: 15px;
+            border: 2px solid #e5e7eb;
+        }
+
+        .profile-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .profile-row:last-child {
+            border-bottom: none;
+        }
+
+        .profile-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+        }
+
+        .profile-value {
+            font-size: 13px;
+            color: #1f2937;
+            font-weight: 600;
+            max-width: 200px;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .email-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .email-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .cadence-select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .cadence-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status-message {
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .status-message.success {
+            background: #d1fae5;
+            color: #065f46;
+            display: block;
+        }
+
+        .status-message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6b7280;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .login-required {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .login-required p {
+            color: #6b7280;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🎯 Add to Cadence</h2>
+        <p>Automatically add this LinkedIn profile to your workflow</p>
+    </div>
+
+    <div id="loadingView" class="loading" style="display: none;">
+        <div class="spinner"></div>
+        <p>Loading profile data...</p>
+    </div>
+
+    <div id="loginView" class="login-required" style="display: none;">
+        <p>Please log in to CadenceFlow first</p>
+        <button class="btn btn-primary" id="openCadenceFlowBtn">Open CadenceFlow</button>
+        
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+            <p style="font-size: 12px; color: #999; margin-bottom: 10px;">Or manually set token:</p>
+            <input type="text" id="manualTokenInput" placeholder="Paste token here" style="width: 100%; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px; margin-bottom: 10px;">
+            <button class="btn btn-primary" id="setTokenBtn" style="padding: 8px; font-size: 12px;">Set Token</button>
+        </div>
+    </div>
+
+    <div id="mainView" class="content" style="display: none;">
+        <div class="section">
+            <div class="section-title">Profile Information</div>
+            <div class="profile-info">
+                <div class="profile-row">
+                    <span class="profile-label">Name</span>
+                    <span class="profile-value" id="profileName">-</span>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">Company</span>
+                    <span class="profile-value" id="profileCompany">-</span>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">Title</span>
+                    <span class="profile-value" id="profileTitle">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Email Address</div>
+            <input type="email" 
+                   class="email-input" 
+                   id="emailInput" 
+                   placeholder="Enter email address"
+                   required>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Select Cadence</div>
+            <select class="cadence-select" id="cadenceSelect">
+                <option value="">Loading cadences...</option>
+            </select>
+        </div>
+
+        <button class="btn btn-primary" id="addToCadenceBtn" disabled>
+            Add to Cadence
+        </button>
+
+        <div id="statusMessage" class="status-message"></div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
+
+

@@ -1067,7 +1067,18 @@ class WorkflowBuilder {
                     
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: 600;">Message:</label>
-                        <textarea id="emailBody" rows="8" placeholder="Email body..."
+                        <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                            <div style="font-size: 12px; font-weight: 600; color: #0369a1; margin-bottom: 6px;">💡 Template Variables (auto-replaced from LinkedIn):</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; font-family: monospace; color: #0c4a6e;">
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{firstName}}</span>
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{lastName}}</span>
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{fullName}}</span>
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{company}}</span>
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{title}}</span>
+                                <span style="background: white; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;">{{email}}</span>
+                            </div>
+                        </div>
+                        <textarea id="emailBody" rows="8" placeholder="Hi {{firstName}}, I noticed you're the {{title}} at {{company}}..."
                             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: vertical;">${node.config?.template || ''}</textarea>
                     </div>
                     
