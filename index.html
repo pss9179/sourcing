@@ -43,6 +43,8 @@
             <div class="header-actions">
                 <button class="btn btn-secondary" id="loginBtn" onclick="window.location.href='http://localhost:3000/auth/google'">Login with Google</button>
                 <span id="userEmail" style="display: none; margin-right: 15px; color: #666; font-size: 14px;"></span>
+                <button class="btn btn-secondary" id="saveCadenceBtn" style="display: none;">💾 Save Cadence</button>
+                <button class="btn btn-secondary" id="loadCadenceBtn" style="display: none;">📂 Load Cadence</button>
                 <button class="btn btn-primary" id="runWorkflowBtn" style="display: none;">▶️ Start Flow</button>
             </div>
             </div>
@@ -110,6 +112,51 @@
         </div>
     </div>
     
+    <script>
+        // Store token globally BEFORE script.js loads
+        window._authToken = localStorage.getItem('authToken');
+        
+        // Handle OAuth callback
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        if (urlToken) {
+            localStorage.setItem('authToken', urlToken);
+            window._authToken = urlToken;
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+    </script>
     <script src="script.js"></script>
+    <script>
+        // After script.js loads, set up auth UI
+        (function() {
+            const token = window._authToken;
+            
+            if (token) {
+                // Verify token
+                fetch('http://localhost:3000/api/user', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                })
+                .then(res => {
+                    if (!res.ok) throw new Error('Invalid token');
+                    return res.json();
+                })
+                .then(user => {
+                    // Show logged in UI
+                    document.getElementById('loginBtn').style.display = 'none';
+                    document.getElementById('userEmail').textContent = user.email;
+                    document.getElementById('userEmail').style.display = 'inline-block';
+                    document.getElementById('saveCadenceBtn').style.display = 'inline-block';
+                    document.getElementById('loadCadenceBtn').style.display = 'inline-block';
+                    document.getElementById('runWorkflowBtn').style.display = 'inline-block';
+                    console.log('✅ Logged in as:', user.email);
+                })
+                .catch(() => {
+                    localStorage.removeItem('authToken');
+                    window._authToken = null;
+                    location.reload();
+                });
+            }
+        })();
+    </script>
 </body>
 </html>

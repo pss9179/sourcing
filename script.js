@@ -7,15 +7,15 @@ class WorkflowBuilder {
         this.isConnecting = false;
         this.connectionStart = null;
         this.tempLine = null;
-        this.authToken = null;
+        this.authToken = window._authToken || null;
         this.user = null;
         this.contacts = [];
         this.init();
+        console.log('🔧 WorkflowBuilder initialized with token:', this.authToken ? 'YES' : 'NO');
     }
 
     init() {
         this.setupEventListeners();
-        this.checkAuth();
         this.addStartNode();
     }
 
@@ -55,36 +55,16 @@ class WorkflowBuilder {
         // Run Workflow button
         document.getElementById('runWorkflowBtn').addEventListener('click', () => this.runWorkflow());
 
+        // Save/Load Cadence buttons
+        document.getElementById('saveCadenceBtn').addEventListener('click', () => this.saveCadence());
+        document.getElementById('loadCadenceBtn').addEventListener('click', () => this.loadCadence());
+
         // Contact management buttons
         document.getElementById('addContactBtn').addEventListener('click', () => this.showAddContactModal());
         document.getElementById('viewContactsBtn').addEventListener('click', () => this.showContactsModal());
     }
 
     // Authentication methods
-    checkAuth() {
-        // Check for token in URL first (from OAuth callback)
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlToken = urlParams.get('token');
-        
-        if (urlToken) {
-            // Store token from OAuth callback
-            localStorage.setItem('authToken', urlToken);
-            this.authToken = urlToken;
-            this.fetchUser();
-            // Clean up URL
-            window.history.replaceState({}, document.title, window.location.pathname);
-            return;
-        }
-        
-        // Check for stored token
-        const token = localStorage.getItem('authToken');
-        if (token) {
-            this.authToken = token;
-            this.fetchUser();
-        } else {
-            this.showLogin();
-        }
-    }
 
     login() {
         window.location.href = 'http://localhost:3000/auth/google';
@@ -613,8 +593,10 @@ class WorkflowBuilder {
             </div>
             <div class="node-description">
                 ${nodeData.description}
-                ${nodeData.config?.to ? `<br><span style="font-size: 11px;">To: ${nodeData.config.to}</span>` : ''}
-                ${isEmailNode ? '<br><span style="font-size: 11px; color: #666;">Click to configure</span>' : ''}
+                ${nodeData.config?.to ? `<br><span style="font-size: 11px;">📧 To: ${nodeData.config.to}</span>` : ''}
+                ${nodeData.config?.subject ? `<br><span style="font-size: 11px;">📝 ${nodeData.config.subject}</span>` : ''}
+                ${nodeData.config?.delayType ? `<br><span style="font-size: 11px;">⏰ ${this.getDelayDescription(nodeData.config)}</span>` : ''}
+                ${isEmailNode && !nodeData.config?.to ? '<br><span style="font-size: 11px; color: #666;">Click to configure</span>' : ''}
             </div>
             <div class="connection-point top" data-side="top"></div>
             <div class="connection-point bottom" data-side="bottom"></div>
@@ -658,6 +640,24 @@ class WorkflowBuilder {
             'task': 'fas fa-tasks'
         };
         return icons[type] || 'fas fa-circle';
+    }
+
+    getDelayDescription(config) {
+        if (!config.delayType) return '';
+        
+        switch(config.delayType) {
+            case 'immediate':
+                return 'Send immediately';
+            case 'minutes':
+                return `After ${config.delayValue} min`;
+            case 'days':
+                return `After ${config.delayValue} days`;
+            case 'specific':
+                const date = new Date(config.delayValue);
+                return `On ${date.toLocaleDateString()} at ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+            default:
+                return '';
+        }
     }
 
     setupNodeDrag(nodeElement, nodeData) {
@@ -1072,19 +1072,29 @@ class WorkflowBuilder {
                     </div>
                     
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">Send After (days):</label>
-                        <input type="number" id="emailDelay" value="${node.config?.delay || 0}" min="0"
-                            style="width: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
-                        <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">0 = Send immediately, 1+ = Days from now</p>
+                        <label style="display: block; margin-bottom: 5px; font-weight: 600;">When to Send:</label>
+                        <select id="delayType" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 10px;">
+                            <option value="immediate" ${node.config?.delayType === 'immediate' ? 'selected' : ''}>Send Immediately</option>
+                            <option value="minutes" ${node.config?.delayType === 'minutes' ? 'selected' : ''}>After X Minutes</option>
+                            <option value="days" ${node.config?.delayType === 'days' ? 'selected' : ''}>After X Days</option>
+                            <option value="specific" ${node.config?.delayType === 'specific' ? 'selected' : ''}>Specific Date & Time</option>
+                        </select>
+                        
+                        <div id="delayValueContainer" style="display: ${node.config?.delayType && node.config?.delayType !== 'immediate' ? 'block' : 'none'};">
+                            <input type="number" id="delayValueNumber" value="${node.config?.delayValue || 1}" min="1"
+                                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; display: ${node.config?.delayType === 'minutes' || node.config?.delayType === 'days' ? 'block' : 'none'};">
+                            <input type="datetime-local" id="delayValueDate" value="${node.config?.delayValue || ''}"
+                                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; display: ${node.config?.delayType === 'specific' ? 'block' : 'none'};">
+                        </div>
                     </div>
                 </div>
                 
                 <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
-                    <button onclick="document.querySelector('.email-config-modal').remove()" 
+                    <button id="cancelEmailBtn"
                         style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">
                         Cancel
                     </button>
-                    <button onclick="workflowBuilder.saveEmailConfig('${nodeId}')" 
+                    <button id="saveEmailBtn"
                         style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
                         Save
                     </button>
@@ -1093,6 +1103,36 @@ class WorkflowBuilder {
         `;
         
         document.body.appendChild(modal);
+        
+        // Attach event listeners after modal is in the DOM
+        document.getElementById('cancelEmailBtn').addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        document.getElementById('saveEmailBtn').addEventListener('click', () => {
+            this.saveEmailConfig(nodeId);
+        });
+        
+        // Handle delay type changes
+        document.getElementById('delayType').addEventListener('change', (e) => {
+            const delayType = e.target.value;
+            const container = document.getElementById('delayValueContainer');
+            const numberInput = document.getElementById('delayValueNumber');
+            const dateInput = document.getElementById('delayValueDate');
+            
+            if (delayType === 'immediate') {
+                container.style.display = 'none';
+            } else {
+                container.style.display = 'block';
+                if (delayType === 'minutes' || delayType === 'days') {
+                    numberInput.style.display = 'block';
+                    dateInput.style.display = 'none';
+                } else if (delayType === 'specific') {
+                    numberInput.style.display = 'none';
+                    dateInput.style.display = 'block';
+                }
+            }
+        });
     }
 
     googleSignIn(nodeId) {
@@ -1154,7 +1194,18 @@ class WorkflowBuilder {
         node.config.to = document.getElementById('emailTo').value;
         node.config.subject = document.getElementById('emailSubject').value;
         node.config.template = document.getElementById('emailBody').value;
-        node.config.delay = parseInt(document.getElementById('emailDelay').value) || 0;
+        
+        // Save delay configuration
+        const delayType = document.getElementById('delayType').value;
+        node.config.delayType = delayType;
+        
+        if (delayType === 'immediate') {
+            node.config.delayValue = 0;
+        } else if (delayType === 'minutes' || delayType === 'days') {
+            node.config.delayValue = parseInt(document.getElementById('delayValueNumber').value) || 1;
+        } else if (delayType === 'specific') {
+            node.config.delayValue = document.getElementById('delayValueDate').value;
+        }
         
         // Update node description
         node.description = node.config.subject || 'Email configured';
@@ -1162,10 +1213,15 @@ class WorkflowBuilder {
         // Close modal
         document.querySelector('.email-config-modal').remove();
         
-        // Update canvas
-        this.updateCanvas();
+        // Re-render the node to show the updated config visuals
+        const nodeElement = document.getElementById(nodeId);
+        if (nodeElement) {
+            nodeElement.remove();
+        }
+        this.renderNode(node);
         
-        alert('✅ Email configuration saved!');
+        // Redraw all connections
+        this.redrawConnections();
     }
 
     async runWorkflow() {
@@ -1191,9 +1247,9 @@ class WorkflowBuilder {
         }
         
         // Check if all email nodes are configured
-        const unconfiguredNodes = emailNodes.filter(n => !n.config?.googleAuth || !n.config?.to);
+        const unconfiguredNodes = emailNodes.filter(n => !n.config?.to || !n.config?.subject || !n.config?.template);
         if (unconfiguredNodes.length > 0) {
-            alert('Please configure all email nodes (click the ⚙️ icon)');
+            alert('Please configure all email nodes (recipient, subject, and message required)');
             return;
         }
         
@@ -1215,6 +1271,11 @@ class WorkflowBuilder {
             if (response.ok) {
                 const result = await response.json();
                 alert(`✅ Workflow executed successfully!\n\n${result.message}`);
+            } else if (response.status === 401 || response.status === 403) {
+                // Token expired or invalid - clear and prompt re-login
+                localStorage.removeItem('authToken');
+                alert('⚠️ Session expired. Please log in again.');
+                window.location.reload();
             } else {
                 const error = await response.json();
                 alert(`❌ Error: ${error.error}`);
@@ -1222,6 +1283,114 @@ class WorkflowBuilder {
         } catch (error) {
             alert(`❌ Error running workflow: ${error.message}`);
         }
+    }
+
+    saveCadence() {
+        const cadenceName = prompt('Enter a name for this cadence:');
+        if (!cadenceName) return;
+        
+        const cadence = {
+            name: cadenceName,
+            nodes: this.nodes,
+            connections: this.connections,
+            savedAt: new Date().toISOString()
+        };
+        
+        // Get existing cadences from localStorage
+        const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
+        
+        // Add new cadence
+        savedCadences.push(cadence);
+        
+        // Save back to localStorage
+        localStorage.setItem('savedCadences', JSON.stringify(savedCadences));
+        
+        // Show success message briefly
+        const message = document.createElement('div');
+        message.style.cssText = `
+            position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+            padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        `;
+        message.textContent = `✅ Cadence "${cadenceName}" saved!`;
+        document.body.appendChild(message);
+        setTimeout(() => message.remove(), 2000);
+    }
+
+    loadCadence() {
+        const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
+        
+        if (savedCadences.length === 0) {
+            alert('No saved cadences found. Create and save a cadence first!');
+            return;
+        }
+        
+        // Create modal to show list of cadences
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); display: flex; align-items: center;
+            justify-content: center; z-index: 10000;
+        `;
+        
+        const cadenceList = savedCadences.map((cadence, index) => `
+            <div style="padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; cursor: pointer; background: white; transition: all 0.2s;"
+                 onmouseover="this.style.background='#F3F4F6'" onmouseout="this.style.background='white'"
+                 onclick="workflowBuilder.loadCadenceByIndex(${index}); document.querySelector('.cadence-load-modal').remove();">
+                <div style="font-weight: 600; font-size: 16px; margin-bottom: 5px;">${cadence.name}</div>
+                <div style="font-size: 12px; color: #666;">
+                    ${cadence.nodes.length} nodes • Saved ${new Date(cadence.savedAt).toLocaleDateString()}
+                </div>
+            </div>
+        `).join('');
+        
+        modal.innerHTML = `
+            <div class="cadence-load-modal" style="background: white; padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+                <h2 style="margin-top: 0;">📂 Load Cadence</h2>
+                <div style="margin: 20px 0;">
+                    ${cadenceList}
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button onclick="document.querySelector('.cadence-load-modal').parentElement.remove()"
+                        style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+
+    loadCadenceByIndex(index) {
+        const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
+        const cadence = savedCadences[index];
+        
+        if (!cadence) return;
+        
+        // Clear current workflow
+        document.getElementById('workflowNodes').innerHTML = '';
+        
+        // Load nodes and connections
+        this.nodes = cadence.nodes;
+        this.connections = cadence.connections;
+        
+        // Render all nodes
+        this.nodes.forEach(node => this.renderNode(node));
+        
+        // Redraw all connections
+        this.redrawConnections();
+        
+        // Show success message
+        const message = document.createElement('div');
+        message.style.cssText = `
+            position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+            padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        `;
+        message.textContent = `✅ Cadence "${cadence.name}" loaded!`;
+        document.body.appendChild(message);
+        setTimeout(() => message.remove(), 2000);
     }
 }
 
@@ -1231,62 +1400,4 @@ let currentUser = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     workflowBuilder = new WorkflowBuilder();
-    
-    // Handle auth success
-    const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('token');
-    if (token) {
-        localStorage.setItem('authToken', token);
-        workflowBuilder.authToken = token;
-        checkAuth();
-        // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
-    } else {
-        // Check if already logged in
-        const savedToken = localStorage.getItem('authToken');
-        if (savedToken) {
-            workflowBuilder.authToken = savedToken;
-            checkAuth();
-        } else {
-            showLoginButton();
-        }
-    }
-    
-    // Login button handler
-    document.getElementById('loginBtn').addEventListener('click', () => {
-        window.location.href = 'http://localhost:3000/auth/google';
-    });
 });
-
-async function checkAuth() {
-    try {
-        const response = await fetch('http://localhost:3000/api/user', {
-            headers: {
-                'Authorization': `Bearer ${workflowBuilder.authToken}`
-            }
-        });
-        
-        if (response.ok) {
-            currentUser = await response.json();
-            showLoggedIn(currentUser);
-        } else {
-            showLoginButton();
-        }
-    } catch (error) {
-        console.error('Auth check failed:', error);
-        showLoginButton();
-    }
-}
-
-function showLoginButton() {
-    document.getElementById('loginBtn').style.display = 'inline-block';
-    document.getElementById('userEmail').style.display = 'none';
-    document.getElementById('runWorkflowBtn').style.display = 'none';
-}
-
-function showLoggedIn(user) {
-    document.getElementById('loginBtn').style.display = 'none';
-    document.getElementById('userEmail').style.display = 'inline-block';
-    document.getElementById('userEmail').textContent = `Logged in as: ${user.email}`;
-    document.getElementById('runWorkflowBtn').style.display = 'inline-block';
-}

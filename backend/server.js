@@ -210,8 +210,8 @@ app.get('/auth/google', passport.authenticate('google', {
 app.get('/auth/google/callback', 
     passport.authenticate('google', { failureRedirect: 'http://localhost:8081/login' }),
     (req, res) => {
-        // Generate JWT token
-        const token = jwt.sign({ userId: req.user.id }, process.env.JWT_SECRET || 'your-secret-key');
+        // Generate JWT token with 30 day expiration
+        const token = jwt.sign({ userId: req.user.id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '30d' });
         res.redirect(`http://localhost:8081/?token=${token}`);
     }
 );
@@ -446,7 +446,7 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
     // Process workflow from start node
     const visited = new Set();
     
-    async function processNode(currentNode, delay = 0) {
+    async function processNode(currentNode, cumulativeDelayMs = 0) {
         if (visited.has(currentNode.id)) return;
         visited.add(currentNode.id);
         
@@ -456,23 +456,39 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
             
             if (config.to && config.subject && config.template) {
                 try {
-                    console.log(`\n📧 Sending email from node: ${currentNode.title}`);
+                    // Calculate delay in milliseconds based on delayType
+                    let delayMs = 0;
+                    
+                    if (config.delayType === 'immediate' || !config.delayType) {
+                        delayMs = 0;
+                    } else if (config.delayType === 'minutes') {
+                        delayMs = (config.delayValue || 0) * 60 * 1000;
+                    } else if (config.delayType === 'days') {
+                        delayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
+                    } else if (config.delayType === 'specific') {
+                        const targetDate = new Date(config.delayValue);
+                        const now = new Date();
+                        delayMs = Math.max(0, targetDate - now);
+                    }
+                    
+                    const totalDelayMs = cumulativeDelayMs + delayMs;
+                    
+                    console.log(`\n📧 Processing email: ${currentNode.title}`);
                     console.log(`   To: ${config.to}`);
                     console.log(`   Subject: ${config.subject}`);
-                    console.log(`   Delay: ${delay} days`);
+                    console.log(`   Delay Type: ${config.delayType || 'immediate'}`);
+                    console.log(`   Delay: ${totalDelayMs}ms (${totalDelayMs / 1000 / 60} minutes)`);
                     
                     // If delay is 0, send immediately
-                    if (delay === 0) {
+                    if (totalDelayMs === 0) {
                         await sendDirectEmail(user, config.to, config.subject, config.template);
                         results.emailsSent++;
                         console.log(`   ✅ Email sent immediately`);
                     } else {
-                        // Schedule for future (days from now)
-                        const scheduledDate = new Date();
-                        scheduledDate.setDate(scheduledDate.getDate() + delay);
-                        console.log(`   ⏰ Scheduled for ${delay} days from now (${scheduledDate.toLocaleString()})`);
+                        // Schedule for future
+                        const scheduledDate = new Date(Date.now() + totalDelayMs);
+                        console.log(`   ⏰ Scheduled for ${scheduledDate.toLocaleString()}`);
                         
-                        // Store in a simple queue (you could use a proper job queue in production)
                         setTimeout(async () => {
                             try {
                                 await sendDirectEmail(user, config.to, config.subject, config.template);
@@ -480,7 +496,7 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
                             } catch (error) {
                                 console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
                             }
-                        }, delay * 24 * 60 * 60 * 1000); // Convert days to milliseconds
+                        }, totalDelayMs);
                         
                         results.emailsSent++;
                     }
@@ -491,13 +507,26 @@ async function processWorkflowExecution(nodes, connections, startNode, userId) {
             }
         }
         
-        // Process connected nodes
+        // Process connected nodes with cumulative delay
         const outgoing = connections.filter(conn => conn.from === currentNode.id);
         for (const connection of outgoing) {
             const nextNode = nodes.find(n => n.id === connection.to);
             if (nextNode) {
-                const nodeDelay = currentNode.config?.delay || 0;
-                await processNode(nextNode, delay + nodeDelay);
+                // Calculate this node's delay
+                let nodeDelayMs = 0;
+                const config = currentNode.config || {};
+                
+                if (config.delayType === 'minutes') {
+                    nodeDelayMs = (config.delayValue || 0) * 60 * 1000;
+                } else if (config.delayType === 'days') {
+                    nodeDelayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
+                } else if (config.delayType === 'specific') {
+                    const targetDate = new Date(config.delayValue);
+                    const now = new Date();
+                    nodeDelayMs = Math.max(0, targetDate - now);
+                }
+                
+                await processNode(nextNode, cumulativeDelayMs + nodeDelayMs);
             }
         }
     }
