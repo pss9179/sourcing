@@ -261,6 +261,27 @@ async function addToCadence() {
         
         showStatus(`✅ ${profileData.fullName} added to cadence!`, 'success');
         
+        // Open/focus the main app and switch to contacts view
+        try {
+            const tabs = await chrome.tabs.query({});
+            const appTab = tabs.find(tab => 
+                tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
+            );
+            
+            if (appTab) {
+                // Focus the app tab
+                await chrome.tabs.update(appTab.id, { active: true });
+                await chrome.windows.update(appTab.windowId, { focused: true });
+                console.log('✅ Focused app tab');
+            } else {
+                // Open the app in a new tab
+                await chrome.tabs.create({ url: 'http://localhost:8081', active: true });
+                console.log('✅ Opened new app tab');
+            }
+        } catch (error) {
+            console.log('Could not focus app tab:', error);
+        }
+        
         setTimeout(() => {
             window.close();
         }, 1500);
