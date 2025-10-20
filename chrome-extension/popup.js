@@ -225,6 +225,21 @@ document.addEventListener('click', async (e) => {
     if (e.target.id === 'openCadenceFlowBtn') {
         chrome.tabs.create({ url: 'http://localhost:8081' });
     }
+    
+    if (e.target.id === 'pasteTokenBtn' || e.target.id === 'setTokenBtn') {
+        const input = document.getElementById('manualTokenInput');
+        const token = input.value.trim();
+        
+        if (!token) {
+            alert('Please paste a token first');
+            return;
+        }
+        
+        // Save token and reload
+        await chrome.storage.local.set({ authToken: token });
+        console.log('✅ Token saved!');
+        location.reload();
+    }
 });
 
 async function addToCadence() {

@@ -214,13 +214,22 @@
     </div>
 
     <div id="loginView" class="login-required" style="display: none;">
-        <p>Please log in to CadenceFlow first</p>
-        <button class="btn btn-primary" id="openCadenceFlowBtn">Open CadenceFlow</button>
+        <p style="font-size: 16px; font-weight: 600; margin-bottom: 20px;">🔐 Extension Setup</p>
         
-        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-            <p style="font-size: 12px; color: #999; margin-bottom: 10px;">Or manually set token:</p>
-            <input type="text" id="manualTokenInput" placeholder="Paste token here" style="width: 100%; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px; margin-bottom: 10px;">
-            <button class="btn btn-primary" id="setTokenBtn" style="padding: 8px; font-size: 12px;">Set Token</button>
+        <div style="background: #fef3c7; border: 2px solid #fbbf24; border-radius: 12px; padding: 15px; margin-bottom: 20px;">
+            <p style="font-size: 13px; color: #92400e; font-weight: 500; margin-bottom: 10px;">📝 Quick Setup:</p>
+            <ol style="font-size: 12px; color: #92400e; padding-left: 20px; line-height: 1.8;">
+                <li>Open <strong>CadenceFlow app</strong> (localhost:8081)</li>
+                <li>Click <strong>"Sync Extension"</strong> button (green)</li>
+                <li>Come back here and paste the token below</li>
+            </ol>
+        </div>
+        
+        <button class="btn btn-primary" id="openCadenceFlowBtn" style="width: 100%; margin-bottom: 15px;">Open CadenceFlow App</button>
+        
+        <div style="position: relative;">
+            <input type="text" id="manualTokenInput" placeholder="Paste token here..." style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 12px; font-family: monospace;">
+            <button class="btn btn-secondary" id="pasteTokenBtn" style="width: 100%; background: #10B981; color: white; padding: 12px;">Paste Token & Continue</button>
         </div>
     </div>
 

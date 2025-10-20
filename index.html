@@ -45,6 +45,10 @@
                     <i class="fab fa-google"></i> Login with Google
                 </button>
                 <span id="userEmail" style="display: none; margin-right: 15px; color: #666; font-size: 14px;"></span>
+                <button class="btn btn-tech" id="syncExtensionBtn" style="display: none; background: #10B981;" title="Sync extension - copy token">
+                    <i class="fas fa-puzzle-piece"></i>
+                    <span id="syncExtensionText">Sync Extension</span>
+                </button>
                 <button class="btn btn-tech" id="saveCadenceBtn" style="display: none;">
                     <i class="fas fa-save"></i>
                     <span>Save</span>
@@ -179,6 +183,33 @@
                 });
             }
             
+            const syncExtensionBtn = document.getElementById('syncExtensionBtn');
+            if (syncExtensionBtn) {
+                syncExtensionBtn.addEventListener('click', async () => {
+                    const token = localStorage.getItem('authToken');
+                    if (!token) {
+                        alert('No token found. Please log in first.');
+                        return;
+                    }
+                    
+                    // Copy to clipboard
+                    try {
+                        await navigator.clipboard.writeText(token);
+                        const textSpan = document.getElementById('syncExtensionText');
+                        textSpan.textContent = '✅ Copied!';
+                        setTimeout(() => {
+                            textSpan.textContent = 'Sync Extension';
+                        }, 2000);
+                        
+                        // Show instructions
+                        alert('Token copied! Now:\n\n1. Go to LinkedIn profile\n2. Click CadenceFlow extension icon\n3. Click "Paste Token" button\n4. Extension is synced!');
+                    } catch (e) {
+                        // Fallback: show token in alert
+                        prompt('Copy this token and paste it in the extension:', token);
+                    }
+                });
+            }
+            
             if (token) {
                 // Verify token
                 fetch('http://localhost:3000/api/user', {
@@ -193,6 +224,7 @@
                     document.getElementById('loginBtn').style.display = 'none';
                     document.getElementById('userEmail').textContent = user.email;
                     document.getElementById('userEmail').style.display = 'inline-block';
+                    document.getElementById('syncExtensionBtn').style.display = 'inline-block';
                     document.getElementById('saveCadenceBtn').style.display = 'inline-block';
                     document.getElementById('loadCadenceBtn').style.display = 'inline-block';
                     document.getElementById('runWorkflowBtn').style.display = 'inline-block';
