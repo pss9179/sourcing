@@ -17,6 +17,39 @@ class WorkflowBuilder {
     init() {
         this.setupEventListeners();
         this.addStartNode();
+        this.checkURLParams();
+    }
+    
+    checkURLParams() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const cadenceId = urlParams.get('loadCadence');
+        const contactData = urlParams.get('contact');
+        
+        if (cadenceId && contactData) {
+            console.log('🔗 URL params detected:', { cadenceId, contactData });
+            
+            try {
+                const contact = JSON.parse(decodeURIComponent(contactData));
+                console.log('📦 Parsed contact from URL:', contact);
+                
+                // Wait for auth to be ready, then load cadence
+                const checkAuth = setInterval(() => {
+                    if (this.authToken) {
+                        clearInterval(checkAuth);
+                        console.log('✅ Auth ready, loading cadence...');
+                        
+                        setTimeout(() => {
+                            this.loadCadenceWithContact(parseInt(cadenceId), contact);
+                        }, 1000);
+                    }
+                }, 100);
+                
+                // Timeout after 5 seconds
+                setTimeout(() => clearInterval(checkAuth), 5000);
+            } catch (error) {
+                console.error('❌ Error parsing URL params:', error);
+            }
+        }
     }
 
     setupEventListeners() {

@@ -261,7 +261,18 @@ async function addToCadence() {
         
         showStatus(`✅ ${profileData.fullName} added to cadence!`, 'success');
         
-        // Open/focus the main app and send message to load cadence
+        // Prepare contact data for URL
+        const contactPayload = encodeURIComponent(JSON.stringify({
+            id: contact.id,
+            email: contactData.email,
+            name: contactData.name,
+            first_name: contactData.firstName,
+            last_name: contactData.lastName,
+            company: contactData.company,
+            title: contactData.title
+        }));
+        
+        // Open/focus the main app with URL parameters
         try {
             const tabs = await chrome.tabs.query({});
             const appTab = tabs.find(tab => 
@@ -269,53 +280,19 @@ async function addToCadence() {
             );
             
             if (appTab) {
-                // Focus the app tab
-                await chrome.tabs.update(appTab.id, { active: true });
+                // Update existing tab with URL parameters
+                const url = `http://localhost:8081?loadCadence=${cadenceId}&contact=${contactPayload}`;
+                await chrome.tabs.update(appTab.id, { url: url, active: true });
                 await chrome.windows.update(appTab.windowId, { focused: true });
-                console.log('✅ Focused app tab');
-                
-                // Send message to app-content.js to load cadence with contact
-                chrome.tabs.sendMessage(appTab.id, {
-                    action: 'contactAdded',
-                    contact: {
-                        id: contact.id,
-                        email: contactData.email,
-                        name: contactData.name,
-                        first_name: contactData.firstName,
-                        last_name: contactData.lastName,
-                        company: contactData.company,
-                        title: contactData.title
-                    },
-                    cadenceId: cadenceId
-                }, (response) => {
-                    console.log('📨 Message sent to app, response:', response);
-                });
+                console.log('✅ Updated existing app tab with URL params');
             } else {
-                // Open the app in a new tab
-                const newTab = await chrome.tabs.create({ url: 'http://localhost:8081', active: true });
-                console.log('✅ Opened new app tab');
-                
-                // Wait for tab to load, then send message
-                setTimeout(() => {
-                    chrome.tabs.sendMessage(newTab.id, {
-                        action: 'contactAdded',
-                        contact: {
-                            id: contact.id,
-                            email: contactData.email,
-                            name: contactData.name,
-                            first_name: contactData.firstName,
-                            last_name: contactData.lastName,
-                            company: contactData.company,
-                            title: contactData.title
-                        },
-                        cadenceId: cadenceId
-                    }, (response) => {
-                        console.log('📨 Message sent to new app tab, response:', response);
-                    });
-                }, 2000);
+                // Open the app in a new tab with URL parameters
+                const url = `http://localhost:8081?loadCadence=${cadenceId}&contact=${contactPayload}`;
+                await chrome.tabs.create({ url: url, active: true });
+                console.log('✅ Opened new app tab with URL params');
             }
         } catch (error) {
-            console.log('Could not focus app tab:', error);
+            console.log('Could not open app tab:', error);
         }
         
         setTimeout(() => {
