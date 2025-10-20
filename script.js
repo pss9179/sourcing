@@ -1897,14 +1897,21 @@ class WorkflowBuilder {
             if (!response.ok) throw new Error('Failed to load cadence');
             
             const cadences = await response.json();
+            console.log('📋 All cadences:', cadences);
+            
             const cadence = cadences.find(c => c.id === cadenceId);
+            console.log('🎯 Found cadence:', cadence);
             
             if (cadence) {
                 // Load the cadence nodes and connections
                 this.nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
                 this.connections = typeof cadence.connections === 'string' ? JSON.parse(cadence.connections) : cadence.connections;
                 
+                console.log('📦 Loaded nodes:', this.nodes.length);
+                console.log('🔗 Loaded connections:', this.connections.length);
+                
                 // Pre-fill contact info in all email nodes
+                let emailNodeCount = 0;
                 this.nodes.forEach(node => {
                     if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(node.type)) {
                         if (!node.config) node.config = {};
@@ -1919,12 +1926,23 @@ class WorkflowBuilder {
                         if (node.config.template) {
                             node.config.template = this.replaceTemplateVariables(node.config.template, contact);
                         }
+                        
+                        emailNodeCount++;
+                        console.log(`📧 Pre-filled email node: ${node.config.subject} → ${contact.email}`);
                     }
                 });
                 
-                // Switch to builder view and render
+                console.log(`✅ Pre-filled ${emailNodeCount} email nodes`);
+                
+                // Switch to builder view FIRST
                 this.switchView('builder');
-                this.rerenderWorkflow();
+                
+                // Wait a bit for view to switch, then render
+                setTimeout(() => {
+                    console.log('🎨 Rendering workflow...');
+                    this.rerenderWorkflow();
+                    console.log('✅ Workflow rendered');
+                }, 200);
                 
                 // Show success message with contact name
                 const message = document.createElement('div');
@@ -1938,10 +1956,13 @@ class WorkflowBuilder {
                 setTimeout(() => message.remove(), 3000);
                 
                 console.log('✅ Cadence loaded with contact data pre-filled');
+            } else {
+                console.error('❌ Cadence not found with ID:', cadenceId);
+                alert('Cadence not found');
             }
         } catch (error) {
             console.error('Error loading cadence with contact:', error);
-            alert('Failed to load cadence');
+            alert('Failed to load cadence: ' + error.message);
         }
     }
 
