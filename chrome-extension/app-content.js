@@ -31,7 +31,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('📥 Contact added from extension:', contact);
         
         // Show notification in the app
-        showSuccessNotification(`✅ ${contact.name} added to cadence!<br><small style="opacity: 0.9;">Emails will be sent according to your workflow</small>`);
+        showSuccessNotification(`✅ ${contact.name} added to cadence!<br><small style="opacity: 0.9;">Click "Contacts" tab to see them</small>`);
+        
+        // Trigger a refresh if user is on contacts view
+        window.postMessage({ 
+            type: 'CADENCEFLOW_CONTACT_ADDED', 
+            contact: contact 
+        }, '*');
         
         sendResponse({ success: true });
     }

@@ -59,9 +59,13 @@ class WorkflowBuilder {
         document.getElementById('saveCadenceBtn').addEventListener('click', () => this.saveCadence());
         document.getElementById('loadCadenceBtn').addEventListener('click', () => this.loadCadence());
 
-        // Contact management buttons
-        document.getElementById('addContactBtn').addEventListener('click', () => this.showAddContactModal());
-        document.getElementById('viewContactsBtn').addEventListener('click', () => this.showContactsModal());
+        // Navigation tabs
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.addEventListener('click', () => this.switchView(tab.dataset.view));
+        });
+        
+        // Refresh contacts button
+        document.getElementById('refreshContactsBtn').addEventListener('click', () => this.loadContacts());
     }
 
     // Authentication methods
@@ -1554,6 +1558,222 @@ class WorkflowBuilder {
         message.textContent = `✅ Cadence "${cadence.name}" loaded!`;
         document.body.appendChild(message);
         setTimeout(() => message.remove(), 2000);
+    }
+    
+    // View switching
+    switchView(viewName) {
+        // Update tabs
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.view === viewName);
+        });
+        
+        // Update views
+        document.querySelectorAll('.view-content').forEach(view => {
+            view.style.display = view.dataset.view === viewName ? 'block' : 'none';
+        });
+        
+        // Update buttons visibility
+        if (viewName === 'builder') {
+            document.getElementById('saveCadenceBtn').style.display = 'inline-block';
+            document.getElementById('loadCadenceBtn').style.display = 'inline-block';
+            document.getElementById('runWorkflowBtn').style.display = 'inline-block';
+        } else {
+            document.getElementById('saveCadenceBtn').style.display = 'none';
+            document.getElementById('loadCadenceBtn').style.display = 'none';
+            document.getElementById('runWorkflowBtn').style.display = 'none';
+        }
+        
+        // Load data for the view
+        if (viewName === 'contacts') {
+            this.loadContacts();
+        } else if (viewName === 'cadences') {
+            this.loadCadencesView();
+        }
+    }
+    
+    // Load contacts from backend
+    async loadContacts() {
+        try {
+            const response = await fetch('http://localhost:3000/api/contacts', {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load contacts');
+            
+            const contacts = await response.json();
+            this.renderContacts(contacts);
+        } catch (error) {
+            console.error('Error loading contacts:', error);
+            document.getElementById('contactsList').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <h3>Error loading contacts</h3>
+                    <p>${error.message}</p>
+                </div>
+            `;
+        }
+    }
+    
+    // Render contacts list
+    renderContacts(contacts) {
+        const container = document.getElementById('contactsList');
+        
+        if (contacts.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-user-plus"></i>
+                    <h3>No contacts yet</h3>
+                    <p>Add contacts from LinkedIn using the Chrome extension</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = contacts.map(contact => `
+            <div class="contact-card">
+                <div class="contact-header">
+                    <div class="contact-name">
+                        ${contact.name || contact.email}
+                    </div>
+                    <span class="cadence-badge">Active</span>
+                </div>
+                <div class="contact-info">
+                    <div class="info-item">
+                        <i class="fas fa-envelope"></i>
+                        <span>${contact.email}</span>
+                    </div>
+                    ${contact.company ? `
+                        <div class="info-item">
+                            <i class="fas fa-building"></i>
+                            <span>${contact.company}</span>
+                        </div>
+                    ` : ''}
+                    ${contact.title ? `
+                        <div class="info-item">
+                            <i class="fas fa-briefcase"></i>
+                            <span>${contact.title}</span>
+                        </div>
+                    ` : ''}
+                    ${contact.linkedin_url ? `
+                        <div class="info-item">
+                            <i class="fab fa-linkedin"></i>
+                            <a href="${contact.linkedin_url}" target="_blank" style="color: #3b82f6;">View Profile</a>
+                        </div>
+                    ` : ''}
+                    <div class="info-item">
+                        <i class="fas fa-clock"></i>
+                        <span>Added ${new Date(contact.created_at).toLocaleDateString()}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+    
+    // Load cadences view
+    async loadCadencesView() {
+        try {
+            const response = await fetch('http://localhost:3000/api/cadences', {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load cadences');
+            
+            const cadences = await response.json();
+            this.renderCadencesView(cadences);
+        } catch (error) {
+            console.error('Error loading cadences:', error);
+            document.getElementById('cadencesList').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <h3>Error loading cadences</h3>
+                    <p>${error.message}</p>
+                </div>
+            `;
+        }
+    }
+    
+    // Render cadences view
+    renderCadencesView(cadences) {
+        const container = document.getElementById('cadencesList');
+        
+        if (cadences.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-project-diagram"></i>
+                    <h3>No cadences yet</h3>
+                    <p>Create your first cadence in the Builder tab</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = cadences.map(cadence => {
+            const nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
+            const emailCount = nodes.filter(n => n.type === 'email' || n.type.includes('email')).length;
+            
+            return `
+                <div class="cadence-card-item">
+                    <div class="contact-header">
+                        <div class="contact-name">
+                            ${cadence.name}
+                        </div>
+                        <button class="btn btn-primary" onclick="workflowBuilder.loadCadenceById(${cadence.id})">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                    </div>
+                    <div class="contact-info">
+                        <div class="info-item">
+                            <i class="fas fa-envelope"></i>
+                            <span>${emailCount} Email${emailCount !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-clock"></i>
+                            <span>Created ${new Date(cadence.created_at).toLocaleDateString()}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    // Load specific cadence by ID
+    async loadCadenceById(cadenceId) {
+        try {
+            const response = await fetch(`http://localhost:3000/api/cadences`, {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load cadence');
+            
+            const cadences = await response.json();
+            const cadence = cadences.find(c => c.id === cadenceId);
+            
+            if (cadence) {
+                this.nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
+                this.connections = typeof cadence.connections === 'string' ? JSON.parse(cadence.connections) : cadence.connections;
+                this.switchView('builder');
+                this.rerenderWorkflow();
+                
+                const message = document.createElement('div');
+                message.style.cssText = `
+                    position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+                    padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                `;
+                message.textContent = `✅ Cadence "${cadence.name}" loaded!`;
+                document.body.appendChild(message);
+                setTimeout(() => message.remove(), 2000);
+            }
+        } catch (error) {
+            console.error('Error loading cadence:', error);
+            alert('Failed to load cadence');
+        }
     }
 }
 

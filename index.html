@@ -37,8 +37,18 @@
             <!-- Top Header -->
             <div class="header">
                 <div class="header-left">
-                    <h2>New workflow</h2>
-                    <span class="status-badge">Draft</span>
+                    <h2>CadenceFlow</h2>
+                    <div class="nav-tabs" style="display: none;" id="navTabs">
+                        <button class="nav-tab active" data-view="builder">
+                            <i class="fas fa-project-diagram"></i> Builder
+                        </button>
+                        <button class="nav-tab" data-view="cadences">
+                            <i class="fas fa-list-ul"></i> Cadences
+                        </button>
+                        <button class="nav-tab" data-view="contacts">
+                            <i class="fas fa-users"></i> Contacts
+                        </button>
+                    </div>
                 </div>
             <div class="header-actions">
                 <button class="btn btn-secondary" id="loginBtn">
@@ -59,8 +69,8 @@
             </div>
             </div>
             
-            <!-- Workflow Canvas -->
-            <div class="workflow-canvas" id="workflowCanvas">
+            <!-- Workflow Canvas (Builder View) -->
+            <div class="workflow-canvas view-content" id="workflowCanvas" data-view="builder">
                 <div class="canvas-grid"></div>
                 
                 <!-- SVG for connection lines -->
@@ -104,6 +114,31 @@
                     <button class="control-btn" id="refresh">
                         <i class="fas fa-sync"></i>
                     </button>
+                </div>
+            </div>
+            
+            <!-- Cadences View -->
+            <div class="view-content" id="cadencesView" data-view="cadences" style="display: none; padding: 40px; overflow-y: auto;">
+                <div style="max-width: 1200px; margin: 0 auto;">
+                    <h2 style="margin-bottom: 30px; font-size: 28px; color: #1f2937;">
+                        <i class="fas fa-list-ul"></i> Your Cadences
+                    </h2>
+                    <div id="cadencesList"></div>
+                </div>
+            </div>
+            
+            <!-- Contacts View -->
+            <div class="view-content" id="contactsView" data-view="contacts" style="display: none; padding: 40px; overflow-y: auto;">
+                <div style="max-width: 1200px; margin: 0 auto;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                        <h2 style="margin: 0; font-size: 28px; color: #1f2937;">
+                            <i class="fas fa-users"></i> Your Contacts
+                        </h2>
+                        <button class="btn btn-primary" id="refreshContactsBtn">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                    <div id="contactsList"></div>
                 </div>
             </div>
         </div>
@@ -192,6 +227,7 @@
                     document.getElementById('loginBtn').style.display = 'none';
                     document.getElementById('userEmail').textContent = user.email;
                     document.getElementById('userEmail').style.display = 'inline-block';
+                    document.getElementById('navTabs').style.display = 'flex';
                     document.getElementById('saveCadenceBtn').style.display = 'inline-block';
                     document.getElementById('loadCadenceBtn').style.display = 'inline-block';
                     document.getElementById('runWorkflowBtn').style.display = 'inline-block';
