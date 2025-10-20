@@ -395,7 +395,7 @@ class WorkflowBuilder {
                     <br>
                     <div style="display: flex; gap: 10px; margin-top: 20px;">
                         <button type="button" onclick="this.closest('.modal').remove()" style="padding: 10px 20px; border: 1px solid #ddd; background: white; border-radius: 6px; cursor: pointer;">Cancel</button>
-                        <button type="button" onclick="workflowBuilder.executeCadence()" style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Start Sending</button>
+                        <button type="button" onclick="workflowBuilder.executeCadence()" style="padding: 10px 20px; background: #1a1a1a; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Start Sending</button>
                     </div>
                 </form>
             </div>
@@ -828,7 +828,7 @@ class WorkflowBuilder {
         
         this.tempLine.innerHTML = `
             <svg style="width: 100%; height: 100%; position: absolute; top: 0; left: 0;">
-                <path d="M ${startX} ${startY} L ${startX} ${startY}" stroke="#3b82f6" stroke-width="2" fill="none" stroke-dasharray="5,5" marker-end="url(#arrowhead)"/>
+                <path d="M ${startX} ${startY} L ${startX} ${startY}" stroke="#1a1a1a" stroke-width="2" fill="none" stroke-dasharray="5,5" marker-end="url(#arrowhead)"/>
             </svg>
         `;
         
@@ -931,7 +931,7 @@ class WorkflowBuilder {
         pathElement.setAttribute('d', path);
         pathElement.setAttribute('class', 'connection-line');
         pathElement.setAttribute('data-connection-id', connection.id);
-        pathElement.setAttribute('stroke', '#3b82f6');
+        pathElement.setAttribute('stroke', '#1a1a1a');
         pathElement.setAttribute('stroke-width', '2');
         pathElement.setAttribute('fill', 'none');
         pathElement.setAttribute('marker-end', 'url(#arrowhead)');
@@ -1169,7 +1169,7 @@ class WorkflowBuilder {
                         Cancel
                     </button>
                     <button id="saveEmailBtn"
-                        style="padding: 10px 20px; background: #4F46E5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                        style="padding: 10px 20px; background: #1a1a1a; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
                         Save
                     </button>
                 </div>
@@ -1403,7 +1403,7 @@ class WorkflowBuilder {
         // Show success message
         const message = document.createElement('div');
         message.style.cssText = `
-            position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+            position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: white;
             padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         `;
@@ -1584,7 +1584,7 @@ class WorkflowBuilder {
             <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="7" 
                         refX="9" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#1a1a1a" />
                 </marker>
             </defs>
         `;
@@ -1610,7 +1610,7 @@ class WorkflowBuilder {
         // Show success message
         const message = document.createElement('div');
         message.style.cssText = `
-            position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+            position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: white;
             padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1); animation: slideIn 0.3s ease;
         `;
@@ -1735,7 +1735,7 @@ class WorkflowBuilder {
                     ${contact.linkedin_url ? `
                         <div class="info-item">
                             <i class="fab fa-linkedin"></i>
-                            <a href="${contact.linkedin_url}" target="_blank" style="color: #3b82f6;">View Profile</a>
+                            <a href="${contact.linkedin_url}" target="_blank" style="color: #1a1a1a;">View Profile</a>
                         </div>
                     ` : ''}
                     <div class="info-item">
@@ -1804,7 +1804,7 @@ class WorkflowBuilder {
                                     <i class="fas fa-envelope"></i>
                                     <span>${emailCount} Email${emailCount !== 1 ? 's' : ''}</span>
                                 </div>
-                                <div class="info-item" style="${contactCount > 0 ? 'color: #10B981; font-weight: 600;' : ''}">
+                                <div class="info-item" style="${contactCount > 0 ? 'color: #1a1a1a; font-weight: 600;' : ''}">
                                     <i class="fas fa-users"></i>
                                     <span>${contactCount} Contact${contactCount !== 1 ? 's' : ''}</span>
                                 </div>
@@ -1864,7 +1864,7 @@ class WorkflowBuilder {
                     padding: 15px;
                     border-radius: 8px;
                     margin-bottom: 10px;
-                    border-left: 4px solid #10B981;
+                    border-left: 4px solid #1a1a1a;
                 ">
                     <div style="font-weight: 600; color: #1f2937; margin-bottom: 5px;">${contact.name}</div>
                     <div style="font-size: 13px; color: #6b7280;">${contact.email}</div>
@@ -1980,7 +1980,7 @@ class WorkflowBuilder {
                 // Show success message with contact name
                 const message = document.createElement('div');
                 message.style.cssText = `
-                    position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+                    position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: white;
                     padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
                     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
                 `;
@@ -2033,7 +2033,7 @@ class WorkflowBuilder {
                 
                 const message = document.createElement('div');
                 message.style.cssText = `
-                    position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+                    position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: white;
                     padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
                     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
                 `;
