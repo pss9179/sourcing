@@ -16,15 +16,8 @@ function extractLinkedInData() {
     };
 
     try {
-        // Extract name from the profile - try multiple selectors
-        let nameElement = document.querySelector('h1.text-heading-xlarge');
-        if (!nameElement) {
-            nameElement = document.querySelector('h1[class*="text-heading"]');
-        }
-        if (!nameElement) {
-            nameElement = document.querySelector('.pv-text-details__left-panel h1');
-        }
-        
+        // Extract name - simple and direct
+        const nameElement = document.querySelector('h1');
         if (nameElement) {
             data.fullName = nameElement.textContent.trim();
             const nameParts = data.fullName.split(' ');
@@ -32,54 +25,30 @@ function extractLinkedInData() {
             data.lastName = nameParts.slice(1).join(' ') || '';
         }
 
-        // Extract title and company - try multiple methods
-        // Method 1: Look for the subtitle/headline
-        let subtitleElement = document.querySelector('.text-body-medium.break-words');
-        if (!subtitleElement) {
-            subtitleElement = document.querySelector('.pv-text-details__left-panel .text-body-medium');
-        }
-        if (!subtitleElement) {
-            subtitleElement = document.querySelector('[class*="pv-top-card"] [class*="text-body-medium"]');
-        }
-        
-        if (subtitleElement) {
-            const text = subtitleElement.textContent.trim();
-            console.log('Found subtitle text:', text);
+        // Extract title and company - find ANY text that looks like a headline
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+            const text = div.textContent.trim();
             
-            // Try to parse "Title at Company" format
-            const atIndex = text.indexOf(' at ');
-            if (atIndex !== -1) {
-                data.title = text.substring(0, atIndex).trim();
-                data.company = text.substring(atIndex + 4).trim();
-            } else {
-                // If no "at", might just be the title
-                data.title = text;
-            }
-        }
-
-        // Method 2: Look in the experience section
-        if (!data.company) {
-            const experienceSection = document.querySelector('.pv-top-card--experience-list');
-            if (experienceSection) {
-                const companyElement = experienceSection.querySelector('.text-body-medium');
-                if (companyElement) {
-                    data.company = companyElement.textContent.trim();
+            // Look for patterns like "CEO @ Company" or "Title at Company"
+            if ((text.includes(' @ ') || text.includes(' at ')) && text.length > 5 && text.length < 300) {
+                console.log('Found subtitle text:', text);
+                
+                // Parse "CEO @ Company" format
+                if (text.includes(' @ ')) {
+                    const parts = text.split(' @ ');
+                    data.title = parts[0].trim();
+                    // Get everything after @ but before any comma
+                    const companyPart = parts[1].split(',')[0].trim();
+                    data.company = companyPart;
+                    break;
                 }
-            }
-        }
-        
-        // Method 3: Try to find company from any visible text
-        if (!data.company) {
-            const allTextElements = document.querySelectorAll('.pv-text-details__left-panel div');
-            for (const el of allTextElements) {
-                const text = el.textContent.trim();
-                if (text.includes(' at ') && text.length < 200) {
+                // Parse "Title at Company" format
+                else if (text.includes(' at ')) {
                     const parts = text.split(' at ');
-                    if (parts.length === 2) {
-                        data.company = parts[1].trim();
-                        if (!data.title) data.title = parts[0].trim();
-                        break;
-                    }
+                    data.title = parts[0].trim();
+                    data.company = parts[1].split(',')[0].trim();
+                    break;
                 }
             }
         }
