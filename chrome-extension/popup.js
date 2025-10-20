@@ -69,26 +69,42 @@ async function loadPopup() {
     try {
         // Get profile data from active tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        console.log('Current tab URL:', tab.url);
         
-        if (!tab.url.includes('linkedin.com')) {
-            showError('Please open a LinkedIn profile page');
+        if (!tab.url || !tab.url.includes('linkedin.com')) {
+            showError('Please open a LinkedIn profile page first');
             return;
         }
         
-        // Extract profile data from page
-        const response = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileData' });
+        if (!tab.url.includes('/in/')) {
+            showError('Please navigate to a LinkedIn profile page (URL should contain /in/)');
+            return;
+        }
         
-        if (response && response.success) {
-            profileData = response.data;
-            await loadCadences();
-            populateProfileData();
-            showMainView();
-        } else {
-            showError('Could not extract profile data. Please refresh the page.');
+        console.log('Sending message to content script...');
+        
+        // Extract profile data from page
+        try {
+            const response = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileData' });
+            console.log('Content script response:', response);
+            
+            if (response && response.success) {
+                profileData = response.data;
+                console.log('Profile data:', profileData);
+                
+                await loadCadences();
+                await populateProfileData();
+                showMainView();
+            } else {
+                showError('Could not extract profile data. Please refresh the LinkedIn page and try again.');
+            }
+        } catch (msgError) {
+            console.error('Message error:', msgError);
+            showError('Could not connect to LinkedIn page. Please refresh the page and try again.');
         }
     } catch (error) {
         console.error('Error loading popup:', error);
-        showError('Error loading profile data: ' + error.message);
+        showError('Error: ' + error.message);
     }
 }
 
