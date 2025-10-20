@@ -81,6 +81,16 @@ class WorkflowBuilder {
                     this.switchView('contacts');
                 }, 500);
             }
+            
+            // NEW: Listen for cadence loading with contact
+            if (event.data && event.data.type === 'CADENCEFLOW_LOAD_CADENCE_WITH_CONTACT') {
+                console.log('📥 Loading cadence with contact:', event.data);
+                const { contact, cadenceId } = event.data;
+                
+                setTimeout(() => {
+                    this.loadCadenceWithContact(cadenceId, contact);
+                }, 1000);
+            }
         });
     }
 
@@ -1874,6 +1884,80 @@ class WorkflowBuilder {
     }
     
     // Load specific cadence by ID
+    async loadCadenceWithContact(cadenceId, contact) {
+        console.log('🔄 Loading cadence with contact...', { cadenceId, contact });
+        
+        try {
+            const response = await fetch(`http://localhost:3000/api/cadences`, {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load cadence');
+            
+            const cadences = await response.json();
+            const cadence = cadences.find(c => c.id === cadenceId);
+            
+            if (cadence) {
+                // Load the cadence nodes and connections
+                this.nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
+                this.connections = typeof cadence.connections === 'string' ? JSON.parse(cadence.connections) : cadence.connections;
+                
+                // Pre-fill contact info in all email nodes
+                this.nodes.forEach(node => {
+                    if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(node.type)) {
+                        if (!node.config) node.config = {};
+                        
+                        // Fill in the contact's email
+                        node.config.to = contact.email;
+                        
+                        // Replace template variables in subject and body
+                        if (node.config.subject) {
+                            node.config.subject = this.replaceTemplateVariables(node.config.subject, contact);
+                        }
+                        if (node.config.template) {
+                            node.config.template = this.replaceTemplateVariables(node.config.template, contact);
+                        }
+                    }
+                });
+                
+                // Switch to builder view and render
+                this.switchView('builder');
+                this.rerenderWorkflow();
+                
+                // Show success message with contact name
+                const message = document.createElement('div');
+                message.style.cssText = `
+                    position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
+                    padding: 15px 25px; border-radius: 8px; z-index: 10000; font-weight: 600;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                `;
+                message.textContent = `✅ Cadence loaded for ${contact.name}!`;
+                document.body.appendChild(message);
+                setTimeout(() => message.remove(), 3000);
+                
+                console.log('✅ Cadence loaded with contact data pre-filled');
+            }
+        } catch (error) {
+            console.error('Error loading cadence with contact:', error);
+            alert('Failed to load cadence');
+        }
+    }
+
+    // Helper to replace template variables
+    replaceTemplateVariables(text, contact) {
+        if (!text || !contact) return text;
+        
+        return text
+            .replace(/\{\{firstName\}\}/g, contact.first_name || contact.firstName || '')
+            .replace(/\{\{lastName\}\}/g, contact.last_name || contact.lastName || '')
+            .replace(/\{\{name\}\}/g, contact.name || '')
+            .replace(/\{\{company\}\}/g, contact.company || '')
+            .replace(/\{\{title\}\}/g, contact.title || '')
+            .replace(/\{\{email\}\}/g, contact.email || '');
+    }
+
     async loadCadenceById(cadenceId) {
         try {
             const response = await fetch(`http://localhost:3000/api/cadences`, {

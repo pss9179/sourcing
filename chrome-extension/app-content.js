@@ -28,16 +28,17 @@ window.addEventListener('message', (event) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'contactAdded') {
         const { contact, cadenceId } = request;
-        console.log('📥 Contact added from extension:', contact);
+        console.log('📥 Contact added from extension:', contact, 'Cadence ID:', cadenceId);
         
-        // Trigger auto-switch to contacts view
+        // Trigger auto-load of cadence in builder with contact data
         window.postMessage({ 
-            type: 'CADENCEFLOW_CONTACT_ADDED', 
-            contact: contact 
+            type: 'CADENCEFLOW_LOAD_CADENCE_WITH_CONTACT', 
+            contact: contact,
+            cadenceId: cadenceId
         }, '*');
         
         // Show big success notification
-        showBigSuccessNotification(contact.name);
+        showBigSuccessNotification(contact.name, 'Loading cadence in Builder...');
         
         sendResponse({ success: true });
     }
@@ -45,7 +46,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Show big success notification with contact details
-function showBigSuccessNotification(contactName) {
+function showBigSuccessNotification(contactName, subtitle = 'has been added to your cadence') {
     const notification = document.createElement('div');
     notification.innerHTML = `
         <div style="
@@ -84,12 +85,12 @@ function showBigSuccessNotification(contactName) {
                 font-size: 16px;
                 color: #6b7280;
                 margin: 0 0 20px 0;
-            ">${contactName} has been added to your cadence</p>
+            ">${contactName}</p>
             <p style="
                 font-size: 14px;
                 color: #10B981;
                 font-weight: 600;
-            ">Switching to Contacts view...</p>
+            ">${subtitle}</p>
         </div>
         <div style="
             position: fixed;
