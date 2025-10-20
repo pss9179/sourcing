@@ -61,11 +61,17 @@ class WorkflowBuilder {
 
         // Navigation tabs
         document.querySelectorAll('.nav-tab').forEach(tab => {
-            tab.addEventListener('click', () => this.switchView(tab.dataset.view));
+            tab.addEventListener('click', () => {
+                console.log('🔘 Tab clicked:', tab.dataset.view);
+                this.switchView(tab.dataset.view);
+            });
         });
         
-        // Refresh contacts button
-        document.getElementById('refreshContactsBtn').addEventListener('click', () => this.loadContacts());
+        // Refresh contacts button (might not exist yet)
+        const refreshBtn = document.getElementById('refreshContactsBtn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.loadContacts());
+        }
         
         // Listen for contact additions from extension
         window.addEventListener('message', (event) => {
