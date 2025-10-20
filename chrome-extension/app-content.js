@@ -30,19 +30,99 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { contact, cadenceId } = request;
         console.log('📥 Contact added from extension:', contact);
         
-        // Show notification in the app
-        showSuccessNotification(`✅ ${contact.name} added to cadence!<br><small style="opacity: 0.9;">Click "Contacts" tab to see them</small>`);
-        
-        // Trigger a refresh if user is on contacts view
+        // Trigger auto-switch to contacts view
         window.postMessage({ 
             type: 'CADENCEFLOW_CONTACT_ADDED', 
             contact: contact 
         }, '*');
         
+        // Show big success notification
+        showBigSuccessNotification(contact.name);
+        
         sendResponse({ success: true });
     }
     return true;
 });
+
+// Show big success notification with contact details
+function showBigSuccessNotification(contactName) {
+    const notification = document.createElement('div');
+    notification.innerHTML = `
+        <div style="
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            z-index: 999999;
+            text-align: center;
+            animation: popIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            min-width: 400px;
+        ">
+            <div style="
+                width: 80px;
+                height: 80px;
+                background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 20px;
+            ">
+                <i class="fas fa-check" style="font-size: 40px; color: white;"></i>
+            </div>
+            <h2 style="
+                font-size: 24px;
+                font-weight: 700;
+                color: #1f2937;
+                margin: 0 0 10px 0;
+            ">Contact Added!</h2>
+            <p style="
+                font-size: 16px;
+                color: #6b7280;
+                margin: 0 0 20px 0;
+            ">${contactName} has been added to your cadence</p>
+            <p style="
+                font-size: 14px;
+                color: #10B981;
+                font-weight: 600;
+            ">Switching to Contacts view...</p>
+        </div>
+        <div style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 999998;
+        "></div>
+        <style>
+            @keyframes popIn {
+                0% {
+                    transform: translate(-50%, -50%) scale(0.5);
+                    opacity: 0;
+                }
+                100% {
+                    transform: translate(-50%, -50%) scale(1);
+                    opacity: 1;
+                }
+            }
+        </style>
+    `;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.transition = 'opacity 0.3s';
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 300);
+    }, 2500);
+}
 
 // Also check if token is already available on page load
 function checkForExistingToken() {

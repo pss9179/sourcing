@@ -66,6 +66,16 @@ class WorkflowBuilder {
         
         // Refresh contacts button
         document.getElementById('refreshContactsBtn').addEventListener('click', () => this.loadContacts());
+        
+        // Listen for contact additions from extension
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'CADENCEFLOW_CONTACT_ADDED') {
+                console.log('📥 Contact added from extension, switching to contacts view');
+                setTimeout(() => {
+                    this.switchView('contacts');
+                }, 500);
+            }
+        });
     }
 
     // Authentication methods
