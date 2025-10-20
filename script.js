@@ -1747,30 +1747,130 @@ class WorkflowBuilder {
         container.innerHTML = cadences.map(cadence => {
             const nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
             const emailCount = nodes.filter(n => n.type === 'email' || n.type.includes('email')).length;
+            const contactCount = cadence.contactCount || 0;
             
             return `
-                <div class="cadence-card-item">
-                    <div class="contact-header">
-                        <div class="contact-name">
-                            ${cadence.name}
+                <div class="cadence-card-item" style="cursor: pointer; transition: all 0.2s;">
+                    <div class="contact-header" style="align-items: flex-start;">
+                        <div>
+                            <div class="contact-name" style="margin-bottom: 8px;">
+                                ${cadence.name}
+                            </div>
+                            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                                <div class="info-item">
+                                    <i class="fas fa-envelope"></i>
+                                    <span>${emailCount} Email${emailCount !== 1 ? 's' : ''}</span>
+                                </div>
+                                <div class="info-item" style="${contactCount > 0 ? 'color: #10B981; font-weight: 600;' : ''}">
+                                    <i class="fas fa-users"></i>
+                                    <span>${contactCount} Contact${contactCount !== 1 ? 's' : ''}</span>
+                                </div>
+                                <div class="info-item">
+                                    <i class="fas fa-clock"></i>
+                                    <span>${new Date(cadence.created_at).toLocaleDateString()}</span>
+                                </div>
+                            </div>
                         </div>
-                        <button class="btn btn-primary" onclick="workflowBuilder.loadCadenceById(${cadence.id})">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                    </div>
-                    <div class="contact-info">
-                        <div class="info-item">
-                            <i class="fas fa-envelope"></i>
-                            <span>${emailCount} Email${emailCount !== 1 ? 's' : ''}</span>
-                        </div>
-                        <div class="info-item">
-                            <i class="fas fa-clock"></i>
-                            <span>Created ${new Date(cadence.created_at).toLocaleDateString()}</span>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-secondary" onclick="event.stopPropagation(); workflowBuilder.viewCadenceContacts(${cadence.id}, '${cadence.name.replace(/'/g, "\\'")}')">
+                                <i class="fas fa-users"></i> View Contacts
+                            </button>
+                            <button class="btn btn-primary" onclick="event.stopPropagation(); workflowBuilder.loadCadenceById(${cadence.id})">
+                                <i class="fas fa-edit"></i> Edit
+                            </button>
                         </div>
                     </div>
                 </div>
             `;
         }).join('');
+        
+        // Add click handler to each card
+        container.querySelectorAll('.cadence-card-item').forEach((card, index) => {
+            card.addEventListener('click', () => {
+                this.viewCadenceContacts(cadences[index].id, cadences[index].name);
+            });
+        });
+    }
+    
+    // View contacts in a cadence
+    async viewCadenceContacts(cadenceId, cadenceName) {
+        try {
+            console.log('📋 Viewing contacts for cadence:', cadenceId);
+            
+            const response = await fetch(`http://localhost:3000/api/cadences/${cadenceId}/contacts`, {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load cadence contacts');
+            
+            const contacts = await response.json();
+            
+            // Create modal to show contacts
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);
+                display: flex; align-items: center; justify-content: center; z-index: 10000;
+            `;
+            
+            const contactsList = contacts.length > 0 ? contacts.map(contact => `
+                <div style="
+                    background: #f9fafb;
+                    padding: 15px;
+                    border-radius: 8px;
+                    margin-bottom: 10px;
+                    border-left: 4px solid #10B981;
+                ">
+                    <div style="font-weight: 600; color: #1f2937; margin-bottom: 5px;">${contact.name}</div>
+                    <div style="font-size: 13px; color: #6b7280;">${contact.email}</div>
+                    ${contact.company ? `<div style="font-size: 13px; color: #6b7280; margin-top: 3px;"><i class="fas fa-building"></i> ${contact.company}</div>` : ''}
+                </div>
+            `).join('') : '<p style="text-align: center; color: #6b7280; padding: 40px;">No contacts in this cadence yet</p>';
+            
+            modal.innerHTML = `
+                <div style="
+                    background: white;
+                    border-radius: 16px;
+                    padding: 30px;
+                    max-width: 600px;
+                    width: 90%;
+                    max-height: 80vh;
+                    overflow-y: auto;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 style="margin: 0; font-size: 22px; color: #1f2937;">
+                            <i class="fas fa-users"></i> ${cadenceName}
+                        </h3>
+                        <button onclick="this.closest('div[style*=fixed]').remove()" style="
+                            background: none;
+                            border: none;
+                            font-size: 24px;
+                            color: #6b7280;
+                            cursor: pointer;
+                            padding: 5px 10px;
+                        ">&times;</button>
+                    </div>
+                    <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
+                        ${contacts.length} contact${contacts.length !== 1 ? 's' : ''} in this cadence
+                    </p>
+                    ${contactsList}
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Close on backdrop click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) modal.remove();
+            });
+            
+        } catch (error) {
+            console.error('Error viewing cadence contacts:', error);
+            alert('Failed to load contacts');
+        }
     }
     
     // Load specific cadence by ID

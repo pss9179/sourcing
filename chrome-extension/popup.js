@@ -229,7 +229,15 @@ async function addToCadence() {
         }
         
         const contact = await contactResponse.json();
-        console.log('✅ Contact created:', contact);
+        console.log('✅ Contact response:', contact);
+        
+        // Check if contact already exists
+        if (contact.alreadyExists) {
+            showStatus(`⚠️ ${profileData.fullName} is already in your contacts!`, 'error');
+            addBtn.disabled = false;
+            addBtn.textContent = 'Add to Cadence';
+            return;
+        }
         
         // Add them to the cadence
         console.log('📤 Adding to cadence...');

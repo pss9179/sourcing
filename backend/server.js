@@ -277,35 +277,74 @@ app.post('/api/cadences', authenticateToken, (req, res) => {
         });
 });
 
-// Get user's cadences
-app.get('/api/cadences', authenticateToken, (req, res) => {
-    db.all("SELECT * FROM cadences WHERE user_id = ? ORDER BY created_at DESC", [req.user.userId], (err, cadences) => {
-        if (err) {
-            res.status(500).json({ error: 'Database error' });
-        } else {
-            const parsedCadences = cadences.map(cadence => ({
+// Get user's cadences with contact counts
+app.get('/api/cadences', authenticateToken, async (req, res) => {
+    try {
+        const cadences = await new Promise((resolve, reject) => {
+            db.all("SELECT * FROM cadences WHERE user_id = ? ORDER BY created_at DESC", [req.user.userId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+        
+        // Get contact count for each cadence
+        const cadencesWithCounts = await Promise.all(cadences.map(async (cadence) => {
+            const count = await new Promise((resolve, reject) => {
+                db.get("SELECT COUNT(*) as count FROM cadence_contacts WHERE cadence_id = ?", [cadence.id], (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row.count);
+                });
+            });
+            
+            return {
                 ...cadence,
                 nodes: JSON.parse(cadence.nodes),
-                connections: JSON.parse(cadence.connections)
-            }));
-            res.json(parsedCadences);
-        }
-    });
+                connections: JSON.parse(cadence.connections),
+                contactCount: count
+            };
+        }));
+        
+        res.json(cadencesWithCounts);
+    } catch (error) {
+        console.error('Error getting cadences:', error);
+        res.status(500).json({ error: 'Database error' });
+    }
 });
 
 // Add contact
 app.post('/api/contacts', authenticateToken, (req, res) => {
     const { email, name, company, title, firstName, lastName, linkedinUrl } = req.body;
     
-    db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
+    // Check if contact already exists (by email or LinkedIn URL)
+    db.get(`SELECT * FROM contacts WHERE user_id = ? AND (email = ? OR linkedin_url = ?)`,
+        [req.user.userId, email, linkedinUrl],
+        (err, existing) => {
+            if (err) {
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            if (existing) {
+                // Contact already exists - return the existing contact
+                console.log(`⚠️ Contact already exists: ${email}`);
+                return res.json({ 
+                    id: existing.id, 
+                    message: 'Contact already exists',
+                    alreadyExists: true 
+                });
+            }
+            
+            // Insert new contact
+            db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
         function(err) {
             if (err) {
                 res.status(500).json({ error: 'Failed to add contact' });
             } else {
-                res.json({ id: this.lastID, message: 'Contact added successfully' });
+                        console.log(`✅ New contact added: ${email}`);
+                        res.json({ id: this.lastID, message: 'Contact added successfully', alreadyExists: false });
             }
+                });
         });
 });
 
@@ -406,6 +445,25 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
     }
 });
 
+// Get contacts in a cadence
+app.get('/api/cadences/:id/contacts', authenticateToken, (req, res) => {
+    const cadenceId = req.params.id;
+    
+    db.all(`
+        SELECT c.* FROM contacts c
+        INNER JOIN cadence_contacts cc ON c.id = cc.contact_id
+        WHERE cc.cadence_id = ? AND c.user_id = ?
+        ORDER BY cc.added_at DESC
+    `, [cadenceId, req.user.userId], (err, contacts) => {
+        if (err) {
+            console.error('Error getting cadence contacts:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json(contacts);
+        }
+    });
+});
+
 // Add contact to a cadence
 app.post('/api/cadences/:id/add-contact', authenticateToken, async (req, res) => {
     const cadenceId = req.params.id;
@@ -442,6 +500,16 @@ app.post('/api/cadences/:id/add-contact', authenticateToken, async (req, res) =>
         
         // Find the start node
         const startNode = nodes.find(n => n.type === 'start');
+        
+        // Record the cadence-contact relationship
+        await new Promise((resolve, reject) => {
+            db.run(`INSERT OR IGNORE INTO cadence_contacts (cadence_id, contact_id) VALUES (?, ?)`,
+                [cadenceId, contactId],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+        });
         
         // Schedule emails from the cadence with template replacement
         await processWorkflowExecution(nodes, connections, startNode, req.user.userId, contact);
