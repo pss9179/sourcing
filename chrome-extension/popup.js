@@ -232,35 +232,26 @@ document.addEventListener('click', async (e) => {
     }
     
     if (e.target.id === 'openCadenceFlowBtn') {
-        // Open the app and then try to get token after a delay
-        const newTab = await chrome.tabs.create({ url: 'http://localhost:8081' });
+        // Just open the app - they can copy the token manually
+        chrome.tabs.create({ url: 'http://localhost:8081' });
         
-        // Show a message that we're waiting
+        // Update the view to show token instructions
         const loginView = document.getElementById('loginView');
         loginView.innerHTML = `
-            <div class="login-required">
-                <div class="spinner"></div>
-                <p>Opening CadenceFlow...</p>
-                <p style="font-size: 12px; color: #999; margin-top: 10px;">
-                    After logging in, come back and click the extension again
+            <div class="login-required" style="padding: 20px;">
+                <p style="margin-bottom: 15px; font-size: 14px; color: #666;">
+                    ✅ App opened in new tab!
                 </p>
+                <p style="margin-bottom: 20px; font-size: 13px; color: #666; line-height: 1.6;">
+                    Once logged in, copy your token from the app and paste it below:
+                </p>
+                <p style="margin-bottom: 10px; font-size: 12px; color: #999;">
+                    In the app, press F12 → Console → Type: <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">localStorage.getItem('authToken')</code>
+                </p>
+                <input type="text" id="manualTokenInput" placeholder="Paste token here" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; margin-bottom: 12px; font-family: monospace;">
+                <button class="btn btn-primary" id="setTokenBtn" style="width: 100%; padding: 12px;">Save Token & Continue</button>
             </div>
         `;
-        
-        // Wait a bit and try to get the token
-        setTimeout(async () => {
-            try {
-                const response = await chrome.tabs.sendMessage(newTab.id, { action: 'getAuthToken' });
-                if (response && response.token) {
-                    authToken = response.token;
-                    chrome.storage.local.set({ authToken: authToken });
-                    console.log('✅ Got token after opening app!');
-                    window.close(); // Close the popup, user will reopen it
-                }
-            } catch (error) {
-                console.log('Will need to reopen popup after login');
-            }
-        }, 3000);
     }
 });
 
