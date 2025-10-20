@@ -132,7 +132,30 @@
         if (urlToken) {
             localStorage.setItem('authToken', urlToken);
             window._authToken = urlToken;
+            
+            // ALSO save to Chrome extension storage automatically
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                try {
+                    chrome.storage.local.set({ authToken: urlToken }, () => {
+                        console.log('✅ Token auto-saved to extension!');
+                    });
+                } catch (e) {
+                    console.log('Extension not available (this is fine)');
+                }
+            }
+            
             window.history.replaceState({}, document.title, window.location.pathname);
+        }
+        
+        // ALSO sync existing token to extension on page load
+        if (window._authToken && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+            try {
+                chrome.storage.local.set({ authToken: window._authToken }, () => {
+                    console.log('✅ Existing token synced to extension!');
+                });
+            } catch (e) {
+                console.log('Extension not available (this is fine)');
+            }
         }
     </script>
     <script src="script.js"></script>
