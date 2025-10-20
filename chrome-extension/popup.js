@@ -13,8 +13,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function initializeExtension() {
     showLoadingView();
     
-    // Step 1: Get auth token
-    authToken = await getAuthToken();
+    // Step 1: Get auth token from storage (saved by app-content.js)
+    const stored = await chrome.storage.local.get(['authToken']);
+    authToken = stored.authToken;
     
     if (!authToken) {
         console.log('❌ No auth token found');
@@ -63,50 +64,6 @@ async function initializeExtension() {
     
     // Step 6: Show main view
     showMainView();
-}
-
-async function getAuthToken() {
-    // Try Chrome storage first
-    const stored = await chrome.storage.local.get(['authToken']);
-    if (stored.authToken) {
-        console.log('✅ Token from storage');
-        return stored.authToken;
-    }
-    
-    // Try to get from main app tab
-    try {
-        const tabs = await chrome.tabs.query({});
-        const appTab = tabs.find(tab => 
-            tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
-        );
-        
-        if (!appTab) {
-            console.log('❌ No app tab found');
-            return null;
-        }
-        
-        console.log('🔍 Found app tab, getting token...');
-        
-        // Directly execute script to get localStorage token
-        const results = await chrome.scripting.executeScript({
-            target: { tabId: appTab.id },
-            func: () => localStorage.getItem('authToken')
-        });
-        
-        if (results && results[0] && results[0].result) {
-            const token = results[0].result;
-            console.log('✅ Got token from app!');
-            
-            // Save it to storage for next time
-            await chrome.storage.local.set({ authToken: token });
-            
-            return token;
-        }
-    } catch (error) {
-        console.error('Error getting token from app:', error);
-    }
-    
-    return null;
 }
 
 async function populateProfileData() {
@@ -224,21 +181,7 @@ document.addEventListener('click', async (e) => {
     
     if (e.target.id === 'openCadenceFlowBtn') {
         chrome.tabs.create({ url: 'http://localhost:8081' });
-    }
-    
-    if (e.target.id === 'pasteTokenBtn' || e.target.id === 'setTokenBtn') {
-        const input = document.getElementById('manualTokenInput');
-        const token = input.value.trim();
-        
-        if (!token) {
-            alert('Please paste a token first');
-            return;
-        }
-        
-        // Save token and reload
-        await chrome.storage.local.set({ authToken: token });
-        console.log('✅ Token saved!');
-        location.reload();
+        window.close();
     }
 });
 

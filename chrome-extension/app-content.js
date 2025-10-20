@@ -1,53 +1,67 @@
-// Content script for CadenceFlow app (http://localhost:8081)
-// This allows the extension popup to get the auth token from localStorage
+// Content script for CadenceFlow main app (localhost:8081)
+// Listens for auth token and saves it to extension storage
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'getAuthToken') {
-        const token = localStorage.getItem('authToken');
-        sendResponse({ token: token });
+console.log('🔧 CadenceFlow app content script loaded');
+
+// Listen for token broadcasts from the page
+window.addEventListener('message', (event) => {
+    // Only accept messages from same origin
+    if (event.origin !== window.location.origin) {
+        return;
     }
     
-    if (request.action === 'contactAdded') {
-        console.log('🎉 New contact added:', request.contact);
+    if (event.data && event.data.type === 'CADENCEFLOW_AUTH_TOKEN') {
+        const token = event.data.token;
+        console.log('📥 Received token broadcast from app');
         
-        // Show a toast notification
-        const toast = document.createElement('div');
-        toast.style.cssText = `
+        // Save to extension storage
+        chrome.storage.local.set({ authToken: token }, () => {
+            console.log('✅ Token saved to extension storage!');
+            
+            // Show a brief success notification in the page
+            showSuccessNotification();
+        });
+    }
+});
+
+// Also check if token is already available on page load
+function checkForExistingToken() {
+    const token = localStorage.getItem('authToken') || window.CADENCEFLOW_TOKEN;
+    
+    if (token) {
+        console.log('📥 Found existing token on page');
+        chrome.storage.local.set({ authToken: token }, () => {
+            console.log('✅ Existing token synced to extension!');
+        });
+    }
+}
+
+// Check on load
+setTimeout(checkForExistingToken, 500);
+
+// Show a brief notification in the page
+function showSuccessNotification() {
+    const notification = document.createElement('div');
+    notification.innerHTML = `
+        <div style="
             position: fixed;
             top: 20px;
             right: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #10B981 0%, #059669 100%);
             color: white;
-            padding: 20px 30px;
+            padding: 16px 24px;
             border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3);
             z-index: 999999;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            animation: slideInRight 0.4s ease-out;
-            max-width: 400px;
-        `;
-        
-        toast.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="font-size: 32px;">🎯</div>
-                <div>
-                    <div style="font-weight: 700; font-size: 16px; margin-bottom: 5px;">
-                        Contact Added to Cadence!
-                    </div>
-                    <div style="font-size: 14px; opacity: 0.9;">
-                        ${request.contact.name} from ${request.contact.company || 'Unknown Company'}
-                    </div>
-                    <div style="font-size: 12px; opacity: 0.7; margin-top: 3px;">
-                        📧 ${request.contact.email}
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Add animation
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideInRight {
+            font-size: 14px;
+            font-weight: 600;
+            animation: slideIn 0.3s ease-out;
+        ">
+            ✅ Extension synced! Ready to use on LinkedIn
+        </div>
+        <style>
+            @keyframes slideIn {
                 from {
                     transform: translateX(400px);
                     opacity: 0;
@@ -57,22 +71,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     opacity: 1;
                 }
             }
-        `;
-        document.head.appendChild(style);
-        
-        document.body.appendChild(toast);
-        
-        // Remove after 5 seconds
-        setTimeout(() => {
-            toast.style.animation = 'slideInRight 0.4s ease-out reverse';
-            setTimeout(() => toast.remove(), 400);
-        }, 5000);
-        
-        sendResponse({ success: true });
-    }
+        </style>
+    `;
     
-    return true; // Keep the message channel open for async response
-});
-
-console.log('✅ CadenceFlow extension connected to main app');
-
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.animation = 'slideIn 0.3s ease-out reverse';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
