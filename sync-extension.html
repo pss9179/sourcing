@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sync Extension</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        .success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔗 Sync CadenceFlow Extension</h1>
+    <p>Click the button below to sync your login with the Chrome extension:</p>
+    <button onclick="syncExtension()">Sync Extension</button>
+    <div id="status" class="status"></div>
+    
+    <script>
+        function syncExtension() {
+            const token = localStorage.getItem('authToken');
+            const status = document.getElementById('status');
+            
+            if (!token) {
+                status.className = 'status error';
+                status.textContent = '❌ Please log in first!';
+                status.style.display = 'block';
+                return;
+            }
+            
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                try {
+                    chrome.storage.local.set({ authToken: token }, () => {
+                        status.className = 'status success';
+                        status.textContent = '✅ Extension synced! You can now use it on LinkedIn.';
+                        status.style.display = 'block';
+                    });
+                } catch (e) {
+                    status.className = 'status error';
+                    status.textContent = '❌ Extension not installed or not accessible';
+                    status.style.display = 'block';
+                }
+            } else {
+                status.className = 'status error';
+                status.textContent = '❌ Chrome extension API not available';
+                status.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>
+
