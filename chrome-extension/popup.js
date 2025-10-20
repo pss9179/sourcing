@@ -261,7 +261,7 @@ async function addToCadence() {
         
         showStatus(`✅ ${profileData.fullName} added to cadence!`, 'success');
         
-        // Open/focus the main app and switch to contacts view
+        // Open/focus the main app and send message to load cadence
         try {
             const tabs = await chrome.tabs.query({});
             const appTab = tabs.find(tab => 
@@ -273,10 +273,46 @@ async function addToCadence() {
                 await chrome.tabs.update(appTab.id, { active: true });
                 await chrome.windows.update(appTab.windowId, { focused: true });
                 console.log('✅ Focused app tab');
+                
+                // Send message to app-content.js to load cadence with contact
+                chrome.tabs.sendMessage(appTab.id, {
+                    action: 'contactAdded',
+                    contact: {
+                        id: contact.id,
+                        email: contactData.email,
+                        name: contactData.name,
+                        first_name: contactData.firstName,
+                        last_name: contactData.lastName,
+                        company: contactData.company,
+                        title: contactData.title
+                    },
+                    cadenceId: cadenceId
+                }, (response) => {
+                    console.log('📨 Message sent to app, response:', response);
+                });
             } else {
                 // Open the app in a new tab
-                await chrome.tabs.create({ url: 'http://localhost:8081', active: true });
+                const newTab = await chrome.tabs.create({ url: 'http://localhost:8081', active: true });
                 console.log('✅ Opened new app tab');
+                
+                // Wait for tab to load, then send message
+                setTimeout(() => {
+                    chrome.tabs.sendMessage(newTab.id, {
+                        action: 'contactAdded',
+                        contact: {
+                            id: contact.id,
+                            email: contactData.email,
+                            name: contactData.name,
+                            first_name: contactData.firstName,
+                            last_name: contactData.lastName,
+                            company: contactData.company,
+                            title: contactData.title
+                        },
+                        cadenceId: cadenceId
+                    }, (response) => {
+                        console.log('📨 Message sent to new app tab, response:', response);
+                    });
+                }, 2000);
             }
         } catch (error) {
             console.log('Could not focus app tab:', error);
