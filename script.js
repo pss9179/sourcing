@@ -1572,6 +1572,8 @@ class WorkflowBuilder {
     
     // View switching
     switchView(viewName) {
+        console.log('🔄 Switching to view:', viewName);
+        
         // Update tabs
         document.querySelectorAll('.nav-tab').forEach(tab => {
             tab.classList.toggle('active', tab.dataset.view === viewName);
@@ -1579,7 +1581,9 @@ class WorkflowBuilder {
         
         // Update views
         document.querySelectorAll('.view-content').forEach(view => {
-            view.style.display = view.dataset.view === viewName ? 'block' : 'none';
+            const shouldShow = view.dataset.view === viewName;
+            view.style.display = shouldShow ? 'block' : 'none';
+            console.log(`View ${view.dataset.view}: ${shouldShow ? 'shown' : 'hidden'}`);
         });
         
         // Update buttons visibility
@@ -1595,14 +1599,19 @@ class WorkflowBuilder {
         
         // Load data for the view
         if (viewName === 'contacts') {
+            console.log('📥 Loading contacts...');
             this.loadContacts();
         } else if (viewName === 'cadences') {
+            console.log('📥 Loading cadences...');
             this.loadCadencesView();
         }
     }
     
     // Load contacts from backend
     async loadContacts() {
+        console.log('🔄 loadContacts() called');
+        console.log('Auth token:', this.authToken ? 'Present' : 'Missing');
+        
         try {
             const response = await fetch('http://localhost:3000/api/contacts', {
                 headers: {
@@ -1610,17 +1619,25 @@ class WorkflowBuilder {
                 }
             });
             
-            if (!response.ok) throw new Error('Failed to load contacts');
+            console.log('API response status:', response.status);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('API error:', errorText);
+                throw new Error(`Failed to load contacts: ${response.status}`);
+            }
             
             const contacts = await response.json();
+            console.log('✅ Loaded contacts:', contacts.length);
             this.renderContacts(contacts);
         } catch (error) {
-            console.error('Error loading contacts:', error);
+            console.error('❌ Error loading contacts:', error);
             document.getElementById('contactsList').innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-exclamation-circle"></i>
                     <h3>Error loading contacts</h3>
                     <p>${error.message}</p>
+                    <button onclick="workflowBuilder.loadContacts()" class="btn btn-primary" style="margin-top: 20px;">Retry</button>
                 </div>
             `;
         }
