@@ -99,55 +99,8 @@ function extractLinkedInData() {
     }
 }
 
-// Add floating button to LinkedIn profile pages
-function addCadenceFlowButton() {
-    // Check if we're on a profile page
-    if (!window.location.pathname.startsWith('/in/')) {
-        return;
-    }
-
-    // Check if button already exists
-    if (document.getElementById('cadenceflow-btn')) {
-        return;
-    }
-
-    // Create the floating button
-    const button = document.createElement('button');
-    button.id = 'cadenceflow-btn';
-    button.innerHTML = `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-            <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
-        </svg>
-        <span>Add to Cadence</span>
-    `;
-    button.className = 'cadenceflow-button';
-    
-    button.addEventListener('click', async () => {
-        // Just open the extension popup - it handles everything
-        chrome.runtime.sendMessage({
-            action: 'openPopup'
-        });
-    });
-
-    document.body.appendChild(button);
-}
-
-// Run when page loads
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', addCadenceFlowButton);
-} else {
-    addCadenceFlowButton();
-}
-
-// Re-run when navigating within LinkedIn (SPA behavior)
-let lastUrl = location.href;
-new MutationObserver(() => {
-    const url = location.href;
-    if (url !== lastUrl) {
-        lastUrl = url;
-        setTimeout(addCadenceFlowButton, 1000);
-    }
-}).observe(document, { subtree: true, childList: true });
+// No floating button - user just clicks the extension icon in toolbar
+// This is simpler and more reliable
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
