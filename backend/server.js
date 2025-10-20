@@ -372,14 +372,18 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
         
         // Fallback: Generate educated guesses
         if (domain) {
+            // Clean names - remove special characters, spaces, parentheses
+            const cleanFirst = firstName.toLowerCase().replace(/[^a-z]/g, '');
+            const cleanLast = lastName.toLowerCase().replace(/[^a-z]/g, '');
+            
             const patterns = [
-                `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${domain}`,
-                `${firstName.toLowerCase()}${lastName.toLowerCase()}@${domain}`,
-                `${firstName.toLowerCase().charAt(0)}${lastName.toLowerCase()}@${domain}`,
-                `${firstName.toLowerCase()}@${domain}`
+                `${cleanFirst}.${cleanLast}@${domain}`,
+                `${cleanFirst}${cleanLast}@${domain}`,
+                `${cleanFirst.charAt(0)}${cleanLast}@${domain}`,
+                `${cleanFirst}@${domain}`
             ];
             
-            console.log(`💡 Suggesting email patterns for ${domain}`);
+            console.log(`💡 Suggesting email patterns for ${domain} (cleaned: ${cleanFirst} ${cleanLast})`);
             return res.json({
                 suggestions: patterns,
                 source: 'pattern',

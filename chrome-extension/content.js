@@ -20,7 +20,10 @@ function extractLinkedInData() {
         const nameElement = document.querySelector('h1');
         if (nameElement) {
             data.fullName = nameElement.textContent.trim();
-            const nameParts = data.fullName.split(' ');
+            
+            // Remove anything in parentheses for cleaner name parsing
+            const cleanName = data.fullName.replace(/\([^)]*\)/g, '').trim();
+            const nameParts = cleanName.split(' ');
             data.firstName = nameParts[0] || '';
             data.lastName = nameParts.slice(1).join(' ') || '';
         }
