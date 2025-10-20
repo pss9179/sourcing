@@ -1,22 +1,16 @@
-// CadenceFlow Chrome Extension - Background Service Worker
+// Background script for CadenceFlow extension
 
-console.log('🚀 CadenceFlow Background Service Worker Started');
+console.log('🚀 CadenceFlow background script loaded');
 
-// Listen for messages from content script
+// Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'openCadenceSelector') {
-        // Store the profile data
-        chrome.storage.local.set({ profileData: request.data }, () => {
-            // Open the popup
-            chrome.action.openPopup();
-        });
+    console.log('📩 Message received:', request);
+    
+    if (request.action === 'openPopup') {
+        // When the floating button is clicked, open the extension popup
+        // This is done by programmatically triggering the extension icon click
+        chrome.action.openPopup();
     }
+    
     return true;
 });
-
-// Listen for extension installation
-chrome.runtime.onInstalled.addListener(() => {
-    console.log('✅ CadenceFlow Extension Installed');
-});
-
-

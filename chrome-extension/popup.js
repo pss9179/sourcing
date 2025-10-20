@@ -7,105 +7,106 @@ let authToken = null;
 // Initialize popup
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('🚀 Popup initialized');
-    
-    // Try to get token from Chrome storage first
-    chrome.storage.local.get(['authToken'], async (result) => {
-        authToken = result.authToken;
-        console.log('Token from storage:', authToken ? 'Found' : 'Not found');
-        
-        // If no token in storage, try to get it from the main app's localStorage
-        if (!authToken) {
-            try {
-                console.log('Trying to get token from main app...');
-                const tabs = await chrome.tabs.query({});
-                const appTab = tabs.find(tab => 
-                    tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
-                );
-                
-                console.log('Found app tab:', appTab ? 'Yes' : 'No');
-                
-                if (appTab) {
-                    console.log('Sending message to tab:', appTab.id);
-                    
-                    // Use content script to get token
-                    chrome.tabs.sendMessage(appTab.id, { action: 'getAuthToken' }, (response) => {
-                        if (chrome.runtime.lastError) {
-                            console.error('Message error:', chrome.runtime.lastError.message);
-                            showLoginView();
-                            return;
-                        }
-                        
-                        console.log('Response from content script:', response);
-                        
-                        if (response && response.token) {
-                            authToken = response.token;
-                            chrome.storage.local.set({ authToken: authToken });
-                            console.log('✅ Got token from main app!');
-                            loadPopup();
-                        } else {
-                            console.log('No token in response');
-                            showLoginView();
-                        }
-                    });
-                    return;
-                }
-                
-                console.log('No app tab found, showing login view');
-            } catch (error) {
-                console.error('Error getting token from main app:', error);
-            }
-            
-            showLoginView();
-            return;
-        }
-        
-        await loadPopup();
-    });
+    await initializeExtension();
 });
 
-async function loadPopup() {
+async function initializeExtension() {
     showLoadingView();
     
+    // Step 1: Get auth token
+    authToken = await getAuthToken();
+    
+    if (!authToken) {
+        console.log('❌ No auth token found');
+        showLoginView();
+        return;
+    }
+    
+    console.log('✅ Auth token found!');
+    
+    // Step 2: Check if we're on LinkedIn
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    if (!tab.url || !tab.url.includes('linkedin.com/in/')) {
+        showError('Please open a LinkedIn profile page first (URL should contain /in/)');
+        return;
+    }
+    
+    // Step 3: Extract profile data
     try {
-        // Get profile data from active tab
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        console.log('Current tab URL:', tab.url);
+        const response = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileData' });
         
-        if (!tab.url || !tab.url.includes('linkedin.com')) {
-            showError('Please open a LinkedIn profile page first');
+        if (!response || !response.success) {
+            showError('Could not extract profile data. Please refresh the LinkedIn page.');
             return;
         }
         
-        if (!tab.url.includes('/in/')) {
-            showError('Please navigate to a LinkedIn profile page (URL should contain /in/)');
+        profileData = response.data;
+        console.log('📊 Profile data:', profileData);
+        
+        if (!profileData.firstName || !profileData.lastName) {
+            showError('Could not extract name from profile. Please refresh the page.');
             return;
         }
         
-        console.log('Sending message to content script...');
+    } catch (error) {
+        console.error('Error extracting profile:', error);
+        showError('Could not connect to LinkedIn page. Please refresh the page.');
+        return;
+    }
+    
+    // Step 4: Load cadences
+    await loadCadences();
+    
+    // Step 5: Populate UI and find email
+    await populateProfileData();
+    
+    // Step 6: Show main view
+    showMainView();
+}
+
+async function getAuthToken() {
+    // Try Chrome storage first
+    const stored = await chrome.storage.local.get(['authToken']);
+    if (stored.authToken) {
+        console.log('✅ Token from storage');
+        return stored.authToken;
+    }
+    
+    // Try to get from main app tab
+    try {
+        const tabs = await chrome.tabs.query({});
+        const appTab = tabs.find(tab => 
+            tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
+        );
         
-        // Extract profile data from page
-        try {
-            const response = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileData' });
-            console.log('Content script response:', response);
+        if (!appTab) {
+            console.log('❌ No app tab found');
+            return null;
+        }
+        
+        console.log('🔍 Found app tab, getting token...');
+        
+        // Directly execute script to get localStorage token
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: appTab.id },
+            func: () => localStorage.getItem('authToken')
+        });
+        
+        if (results && results[0] && results[0].result) {
+            const token = results[0].result;
+            console.log('✅ Got token from app!');
             
-            if (response && response.success) {
-                profileData = response.data;
-                console.log('Profile data:', profileData);
-                
-                await loadCadences();
-                await populateProfileData();
-                showMainView();
-            } else {
-                showError('Could not extract profile data. Please refresh the LinkedIn page and try again.');
-            }
-        } catch (msgError) {
-            console.error('Message error:', msgError);
-            showError('Could not connect to LinkedIn page. Please refresh the page and try again.');
+            // Save it to storage for next time
+            await chrome.storage.local.set({ authToken: token });
+            
+            return token;
         }
     } catch (error) {
-        console.error('Error loading popup:', error);
-        showError('Error: ' + error.message);
+        console.error('Error getting token from app:', error);
     }
+    
+    return null;
 }
 
 async function populateProfileData() {
@@ -117,12 +118,13 @@ async function populateProfileData() {
     const cadenceSelect = document.getElementById('cadenceSelect');
     const addBtn = document.getElementById('addToCadenceBtn');
     
-    // Auto-find email via API
-    if (!profileData.email && profileData.firstName && profileData.lastName) {
-        emailInput.placeholder = 'Finding email...';
+    // Auto-find email via RocketReach
+    if (profileData.firstName && profileData.lastName && profileData.company) {
+        emailInput.placeholder = '🔍 Finding email via RocketReach...';
         emailInput.disabled = true;
         
         try {
+            console.log('🚀 Calling RocketReach API...');
             const response = await fetch(`${API_BASE}/api/find-email`, {
                 method: 'POST',
                 headers: {
@@ -137,20 +139,28 @@ async function populateProfileData() {
                 })
             });
             
+            console.log('Response status:', response.status);
+            
             if (response.ok) {
                 const result = await response.json();
+                console.log('Email result:', result);
+                
                 if (result.email) {
                     emailInput.value = result.email;
                     profileData.email = result.email;
                     emailInput.style.borderColor = '#10B981';
                     emailInput.style.backgroundColor = '#f0fdf4';
+                    console.log('✅ Found email:', result.email);
                 } else if (result.suggestions && result.suggestions.length > 0) {
                     emailInput.value = result.suggestions[0];
                     emailInput.placeholder = 'Best guess - please verify';
+                    console.log('💡 Using email guess:', result.suggestions[0]);
                 }
+            } else {
+                console.error('Email API error:', await response.text());
             }
         } catch (error) {
-            console.error('Error finding email:', error);
+            console.error('❌ Error finding email:', error);
         } finally {
             emailInput.disabled = false;
             emailInput.placeholder = 'Enter email address';
@@ -170,7 +180,6 @@ async function populateProfileData() {
     emailInput.addEventListener('input', checkFormValid);
     cadenceSelect.addEventListener('change', checkFormValid);
     
-    // Check initial state
     checkFormValid();
 }
 
@@ -190,7 +199,7 @@ async function loadCadences() {
         const select = document.getElementById('cadenceSelect');
         
         if (cadences.length === 0) {
-            select.innerHTML = '<option value="">No cadences available</option>';
+            select.innerHTML = '<option value="">No cadences available - create one first</option>';
             return;
         }
         
@@ -213,40 +222,8 @@ document.addEventListener('click', async (e) => {
         await addToCadence();
     }
     
-    if (e.target.id === 'setTokenBtn') {
-        const tokenInput = document.getElementById('manualTokenInput');
-        const token = tokenInput.value.trim();
-        
-        if (token) {
-            authToken = token;
-            chrome.storage.local.set({ authToken: token }, () => {
-                console.log('✅ Token manually set!');
-                location.reload(); // Reload the popup
-            });
-        }
-    }
-    
     if (e.target.id === 'openCadenceFlowBtn') {
-        // Just open the app - they can copy the token manually
         chrome.tabs.create({ url: 'http://localhost:8081' });
-        
-        // Update the view to show token instructions
-        const loginView = document.getElementById('loginView');
-        loginView.innerHTML = `
-            <div class="login-required" style="padding: 20px;">
-                <p style="margin-bottom: 15px; font-size: 14px; color: #666;">
-                    ✅ App opened in new tab!
-                </p>
-                <p style="margin-bottom: 20px; font-size: 13px; color: #666; line-height: 1.6;">
-                    Once logged in, copy your token from the app and paste it below:
-                </p>
-                <p style="margin-bottom: 10px; font-size: 12px; color: #999;">
-                    In the app, press F12 → Console → Type: <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">localStorage.getItem('authToken')</code>
-                </p>
-                <input type="text" id="manualTokenInput" placeholder="Paste token here" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; margin-bottom: 12px; font-family: monospace;">
-                <button class="btn btn-primary" id="setTokenBtn" style="width: 100%; padding: 12px;">Save Token & Continue</button>
-            </div>
-        `;
     }
 });
 
@@ -254,7 +231,6 @@ async function addToCadence() {
     const emailInput = document.getElementById('emailInput');
     const cadenceSelect = document.getElementById('cadenceSelect');
     const addBtn = document.getElementById('addToCadenceBtn');
-    const statusMessage = document.getElementById('statusMessage');
     
     const email = emailInput.value.trim();
     const cadenceId = cadenceSelect.value;
@@ -268,7 +244,7 @@ async function addToCadence() {
     addBtn.textContent = 'Adding...';
     
     try {
-        // First, create/update the contact
+        // Create/update the contact
         const contactData = {
             name: profileData.fullName,
             email: email,
@@ -278,6 +254,8 @@ async function addToCadence() {
             firstName: profileData.firstName,
             lastName: profileData.lastName
         };
+        
+        console.log('📤 Creating contact:', contactData);
         
         const contactResponse = await fetch(`${API_BASE}/api/contacts`, {
             method: 'POST',
@@ -293,8 +271,10 @@ async function addToCadence() {
         }
         
         const contact = await contactResponse.json();
+        console.log('✅ Contact created:', contact);
         
-        // Then, add them to the cadence
+        // Add them to the cadence
+        console.log('📤 Adding to cadence...');
         const addToCadenceResponse = await fetch(`${API_BASE}/api/cadences/${cadenceId}/add-contact`, {
             method: 'POST',
             headers: {
@@ -311,37 +291,16 @@ async function addToCadence() {
         }
         
         const result = await addToCadenceResponse.json();
+        console.log('✅ Added to cadence:', result);
         
         showStatus(`✅ ${profileData.fullName} added to cadence!`, 'success');
         
-        // Notify the main app tab about the new contact
-        try {
-            const tabs = await chrome.tabs.query({});
-            const appTab = tabs.find(tab => 
-                tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
-            );
-            
-            if (appTab) {
-                chrome.tabs.sendMessage(appTab.id, {
-                    action: 'contactAdded',
-                    contact: {
-                        ...contactData,
-                        id: contact.id
-                    },
-                    cadenceId: cadenceId
-                });
-                console.log('✅ Notified main app of new contact');
-            }
-        } catch (error) {
-            console.log('Could not notify main app:', error);
-        }
-        
         setTimeout(() => {
             window.close();
-        }, 2000);
+        }, 1500);
         
     } catch (error) {
-        console.error('Error adding to cadence:', error);
+        console.error('❌ Error adding to cadence:', error);
         showStatus('Error: ' + error.message, 'error');
         addBtn.disabled = false;
         addBtn.textContent = 'Add to Cadence';
@@ -376,5 +335,3 @@ function showError(message) {
     showMainView();
     showStatus(message, 'error');
 }
-
-
