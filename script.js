@@ -1296,7 +1296,7 @@ class WorkflowBuilder {
         }
     }
 
-    saveCadence() {
+    async saveCadence() {
         const cadenceName = prompt('Enter a name for this cadence:');
         if (!cadenceName) return;
         
@@ -1307,16 +1307,37 @@ class WorkflowBuilder {
             savedAt: new Date().toISOString()
         };
         
-        // Get existing cadences from localStorage
+        // Save to localStorage (for local loading)
         const savedCadences = JSON.parse(localStorage.getItem('savedCadences') || '[]');
-        
-        // Add new cadence
         savedCadences.push(cadence);
-        
-        // Save back to localStorage
         localStorage.setItem('savedCadences', JSON.stringify(savedCadences));
         
-        // Show success message briefly
+        // ALSO save to backend database (for extension access)
+        try {
+            const response = await fetch('http://localhost:3000/api/cadences', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.authToken}`
+                },
+                body: JSON.stringify({
+                    name: cadenceName,
+                    nodes: this.nodes,  // Backend will stringify it
+                    connections: this.connections  // Backend will stringify it
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to save to database');
+            }
+            
+            console.log('✅ Cadence saved to database');
+        } catch (error) {
+            console.error('Error saving to database:', error);
+            // Still show success since localStorage save worked
+        }
+        
+        // Show success message
         const message = document.createElement('div');
         message.style.cssText = `
             position: fixed; top: 20px; right: 20px; background: #10B981; color: white;
