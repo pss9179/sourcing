@@ -117,9 +117,48 @@ async function populateProfileData() {
     const cadenceSelect = document.getElementById('cadenceSelect');
     const addBtn = document.getElementById('addToCadenceBtn');
     
-    // Just set whatever email we have or leave it blank for user to fill
-    emailInput.value = profileData.email || '';
-    emailInput.placeholder = 'Enter email address';
+    // Auto-find email via API
+    if (!profileData.email && profileData.firstName && profileData.lastName) {
+        emailInput.placeholder = 'Finding email...';
+        emailInput.disabled = true;
+        
+        try {
+            const response = await fetch(`${API_BASE}/api/find-email`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: JSON.stringify({
+                    firstName: profileData.firstName,
+                    lastName: profileData.lastName,
+                    company: profileData.company,
+                    domain: profileData.companyDomain
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                if (result.email) {
+                    emailInput.value = result.email;
+                    profileData.email = result.email;
+                    emailInput.style.borderColor = '#10B981';
+                    emailInput.style.backgroundColor = '#f0fdf4';
+                } else if (result.suggestions && result.suggestions.length > 0) {
+                    emailInput.value = result.suggestions[0];
+                    emailInput.placeholder = 'Best guess - please verify';
+                }
+            }
+        } catch (error) {
+            console.error('Error finding email:', error);
+        } finally {
+            emailInput.disabled = false;
+            emailInput.placeholder = 'Enter email address';
+        }
+    } else {
+        emailInput.value = profileData.email || '';
+        emailInput.placeholder = 'Enter email address';
+    }
     
     // Enable button when email is entered
     function checkFormValid() {

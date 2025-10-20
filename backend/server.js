@@ -340,33 +340,49 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
     const { firstName, lastName, company, domain } = req.body;
     
     try {
-        // Try Apollo.io API first
-        if (process.env.APOLLO_API_KEY && process.env.APOLLO_API_KEY !== 'your_apollo_api_key_here') {
-            console.log(`🔍 Looking up email for ${firstName} ${lastName} at ${company}`);
+        // Try Snov.io API
+        if (process.env.SNOV_IO_CLIENT_ID && process.env.SNOV_IO_CLIENT_SECRET && 
+            process.env.SNOV_IO_CLIENT_ID !== 'your_snov_client_id_here') {
             
-            const apolloResponse = await axios.post('https://api.apollo.io/v1/people/match', {
-                first_name: firstName,
-                last_name: lastName,
-                organization_name: company,
-                domain: domain
-            }, {
-                headers: {
-                    'X-Api-Key': process.env.APOLLO_API_KEY,
-                    'Content-Type': 'application/json'
-                }
-            });
+            console.log(`🔍 Looking up email for ${firstName} ${lastName} via Snov.io`);
             
-            if (apolloResponse.data && apolloResponse.data.person && apolloResponse.data.person.email) {
-                console.log(`✅ Found email via Apollo: ${apolloResponse.data.person.email}`);
-                return res.json({
-                    email: apolloResponse.data.person.email,
-                    source: 'apollo',
-                    confidence: 'high'
+            try {
+                // Get OAuth token
+                const authResponse = await axios.post('https://api.snov.io/v1/oauth/access_token', {
+                    grant_type: 'client_credentials',
+                    client_id: process.env.SNOV_IO_CLIENT_ID,
+                    client_secret: process.env.SNOV_IO_CLIENT_SECRET
                 });
+                
+                const accessToken = authResponse.data.access_token;
+                
+                // Find email
+                const emailResponse = await axios.post('https://api.snov.io/v1/get-emails-from-names', {
+                    firstName: firstName,
+                    lastName: lastName,
+                    domain: domain || company.toLowerCase().replace(/[^a-z0-9]/g, '') + '.com'
+                }, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (emailResponse.data && emailResponse.data.emails && emailResponse.data.emails.length > 0) {
+                    const email = emailResponse.data.emails[0].email;
+                    console.log(`✅ Found email via Snov.io: ${email}`);
+                    return res.json({
+                        email: email,
+                        source: 'snov.io',
+                        confidence: 'high'
+                    });
+                }
+            } catch (snovError) {
+                console.log('Snov.io error:', snovError.response?.data || snovError.message);
             }
         }
         
-        // Fallback: Generate educated guesses based on common patterns
+        // Fallback: Generate educated guesses
         if (domain) {
             const patterns = [
                 `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${domain}`,
@@ -375,12 +391,12 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
                 `${firstName.toLowerCase()}@${domain}`
             ];
             
-            console.log(`💡 Apollo not configured. Suggesting email patterns for ${domain}`);
+            console.log(`💡 Suggesting email patterns for ${domain}`);
             return res.json({
                 suggestions: patterns,
                 source: 'pattern',
                 confidence: 'low',
-                message: 'Apollo API not configured. These are educated guesses.'
+                message: 'Using email pattern guesses.'
             });
         }
         
