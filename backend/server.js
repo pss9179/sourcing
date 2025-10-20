@@ -340,45 +340,33 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
     const { firstName, lastName, company, domain } = req.body;
     
     try {
-        // Try Snov.io API
-        if (process.env.SNOV_IO_CLIENT_ID && process.env.SNOV_IO_CLIENT_SECRET && 
-            process.env.SNOV_IO_CLIENT_ID !== 'your_snov_client_id_here') {
-            
-            console.log(`🔍 Looking up email for ${firstName} ${lastName} via Snov.io`);
+        // Try RocketReach API
+        if (process.env.ROCKETREACH_API_KEY) {
+            console.log(`🔍 Looking up email for ${firstName} ${lastName} via RocketReach`);
             
             try {
-                // Get OAuth token
-                const authResponse = await axios.post('https://api.snov.io/v1/oauth/access_token', {
-                    grant_type: 'client_credentials',
-                    client_id: process.env.SNOV_IO_CLIENT_ID,
-                    client_secret: process.env.SNOV_IO_CLIENT_SECRET
-                });
-                
-                const accessToken = authResponse.data.access_token;
-                
-                // Find email
-                const emailResponse = await axios.post('https://api.snov.io/v1/get-emails-from-names', {
-                    firstName: firstName,
-                    lastName: lastName,
-                    domain: domain || company.toLowerCase().replace(/[^a-z0-9]/g, '') + '.com'
+                // RocketReach lookup
+                const searchResponse = await axios.post('https://api.rocketreach.co/v2/api/lookupProfile', {
+                    name: `${firstName} ${lastName}`,
+                    current_employer: company
                 }, {
                     headers: {
-                        'Authorization': `Bearer ${accessToken}`,
+                        'Api-Key': process.env.ROCKETREACH_API_KEY,
                         'Content-Type': 'application/json'
                     }
                 });
                 
-                if (emailResponse.data && emailResponse.data.emails && emailResponse.data.emails.length > 0) {
-                    const email = emailResponse.data.emails[0].email;
-                    console.log(`✅ Found email via Snov.io: ${email}`);
+                if (searchResponse.data && searchResponse.data.emails && searchResponse.data.emails.length > 0) {
+                    const email = searchResponse.data.emails[0].email;
+                    console.log(`✅ Found email via RocketReach: ${email}`);
                     return res.json({
                         email: email,
-                        source: 'snov.io',
+                        source: 'rocketreach',
                         confidence: 'high'
                     });
                 }
-            } catch (snovError) {
-                console.log('Snov.io error:', snovError.response?.data || snovError.message);
+            } catch (rocketError) {
+                console.log('RocketReach error:', rocketError.response?.data || rocketError.message);
             }
         }
         
