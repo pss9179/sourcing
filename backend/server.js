@@ -612,7 +612,11 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
         // If it's an email node, add to sequence
         if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(currentNode.type)) {
             const config = currentNode.config || {};
-            if (config.to && config.subject && config.template) {
+            
+            // Check if we have required fields (allow missing 'to' if we have a contact)
+            const hasRequiredFields = config.subject && config.template && (config.to || (contact && contact.email));
+            
+            if (hasRequiredFields) {
                 // Calculate delay in milliseconds
                 let delayMs = 0;
                 if (config.delayType === 'immediate' || !config.delayType) {
@@ -632,12 +636,20 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
                 const processedBody = contact ? replaceTemplateVariables(config.template, contact) : config.template;
                 const processedTo = contact ? contact.email : config.to;
                 
+                console.log(`📧 Email node configured: to=${processedTo}, subject=${processedSubject}`);
+                
                 emailSequence.push({
                     node: currentNode,
                     to: processedTo,
                     subject: processedSubject,
                     body: processedBody,
                     delayMs: delayMs
+                });
+            } else {
+                console.log(`⚠️ Skipping email node - missing required fields:`, {
+                    hasSubject: !!config.subject,
+                    hasTemplate: !!config.template,
+                    hasTo: !!(config.to || (contact && contact.email))
                 });
             }
         }
