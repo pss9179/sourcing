@@ -308,7 +308,31 @@ async function addToCadence() {
             throw new Error('Failed to add to cadence');
         }
         
+        const result = await addToCadenceResponse.json();
+        
         showStatus(`✅ ${profileData.fullName} added to cadence!`, 'success');
+        
+        // Notify the main app tab about the new contact
+        try {
+            const tabs = await chrome.tabs.query({});
+            const appTab = tabs.find(tab => 
+                tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
+            );
+            
+            if (appTab) {
+                chrome.tabs.sendMessage(appTab.id, {
+                    action: 'contactAdded',
+                    contact: {
+                        ...contactData,
+                        id: contact.id
+                    },
+                    cadenceId: cadenceId
+                });
+                console.log('✅ Notified main app of new contact');
+            }
+        } catch (error) {
+            console.log('Could not notify main app:', error);
+        }
         
         setTimeout(() => {
             window.close();
