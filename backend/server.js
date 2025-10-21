@@ -2893,15 +2893,19 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
         
         // Create email message with threading headers (same as cadence emails)
-        const message = [
+        const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+        const messageParts = [
+            `From: ${user.email}`,
             `To: ${toEmail}`,
-            `Subject: ${subject}`,
+            `Subject: ${utf8Subject}`,
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=utf-8',
             `In-Reply-To: ${responseMessageId}`,
             `References: ${yourOriginalMessageId} ${responseMessageId}`,
-            'Content-Type: text/plain; charset=utf-8',
             '',
             body
-        ].join('\r\n'); // Use \r\n for proper MIME format
+        ];
+        const message = messageParts.join('\r\n'); // Use \r\n for proper MIME format
         
         const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         
