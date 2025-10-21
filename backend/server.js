@@ -386,9 +386,11 @@ async function checkForEmailResponses(userId) {
                         const from = fromHeader ? fromHeader.value : 'Unknown';
                         const date = dateHeader ? new Date(dateHeader.value) : new Date();
                         
-                        // Use the In-Reply-To header which contains the original email's Message-ID
-                        // This is what the person is actually replying to
-                        const originalMessageId = inReplyToHeader ? inReplyToHeader.value : sentEmail.message_id;
+                        // Get the responder's Message-ID (this is what we reply to)
+                        const responseMessageId = messageIdHeader ? messageIdHeader.value : `<${message.id}@mail.gmail.com>`;
+                        
+                        // Get your original Message-ID (for References chain)
+                        const yourOriginalMessageId = inReplyToHeader ? inReplyToHeader.value : sentEmail.message_id;
                         
                         // Check if this is a reply from someone other than the sender
                         if (from.toLowerCase().includes(user.email.toLowerCase())) {
@@ -423,7 +425,7 @@ async function checkForEmailResponses(userId) {
                             
                             // Check for scheduling intent and handle automatically
                             try {
-                                await handleSchedulingResponse(userId, from, body, sentEmail.contact_id, sentEmail.thread_id, originalMessageId);
+                                await handleSchedulingResponse(userId, from, body, sentEmail.contact_id, sentEmail.thread_id, responseMessageId, yourOriginalMessageId);
                             } catch (schedulingError) {
                                 console.error('❌ Error handling scheduling response:', schedulingError);
                             }
@@ -2670,7 +2672,7 @@ function generateAvailableSlots(events, days) {
 }
 
 // Main scheduling response handler
-async function handleSchedulingResponse(userId, fromEmail, responseText, contactId, threadId, originalMessageId) {
+async function handleSchedulingResponse(userId, fromEmail, responseText, contactId, threadId, responseMessageId, yourOriginalMessageId) {
     console.log(`🤖 Analyzing scheduling response from ${fromEmail} in thread ${threadId}`);
     
     try {
@@ -2716,11 +2718,11 @@ async function handleSchedulingResponse(userId, fromEmail, responseText, contact
         
         // Handle different scheduling types (pass threading info)
         if (analysis.schedulingType === 'request_availability') {
-            await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+            await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
         } else if (analysis.schedulingType === 'book_specific_time') {
-            await handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+            await handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
         } else if (analysis.schedulingType === 'general_scheduling') {
-            await handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+            await handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
         }
         
     } catch (error) {
@@ -2729,7 +2731,7 @@ async function handleSchedulingResponse(userId, fromEmail, responseText, contact
 }
 
 // Handle when someone asks for your availability
-async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
     console.log(`📅 Handling availability request from ${contact.name} in thread ${threadId}`);
     
     try {
@@ -2756,7 +2758,7 @@ async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, t
         const availabilityText = generateAvailabilityEmail(availability.availableSlots, contact.name);
         
         // Send the availability response in thread
-        await sendSchedulingResponse(userId, fromEmail, `Re: Your availability request`, availabilityText, threadId, originalMessageId);
+        await sendSchedulingResponse(userId, fromEmail, `Re: Your availability request`, availabilityText, threadId, responseMessageId, yourOriginalMessageId);
         
         console.log(`✅ Availability response sent to ${contact.name} in thread ${threadId}`);
         
@@ -2766,7 +2768,7 @@ async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, t
 }
 
 // Handle when someone suggests a specific time
-async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
     console.log(`📅 Handling specific time booking from ${contact.name} in thread ${threadId}`);
     
     try {
@@ -2819,7 +2821,7 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
             confirmationText = `Hi ${contact.name},\n\nThat time works for me! Let me check my calendar and send you a few specific options.\n\nBest regards`;
         }
         
-        await sendSchedulingResponse(userId, fromEmail, `Re: Meeting confirmation`, confirmationText, threadId, originalMessageId);
+        await sendSchedulingResponse(userId, fromEmail, `Re: Meeting confirmation`, confirmationText, threadId, responseMessageId, yourOriginalMessageId);
         
         console.log(`✅ Time confirmation sent to ${contact.name} in thread ${threadId}`);
         
@@ -2829,12 +2831,12 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
 }
 
 // Handle general scheduling requests
-async function handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+async function handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
     console.log(`📅 Handling general scheduling request from ${contact.name} in thread ${threadId}`);
     
     try {
         // Get availability and send it
-        await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+        await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
         
     } catch (error) {
         console.error('❌ Error handling general scheduling request:', error);
@@ -2857,7 +2859,7 @@ function generateAvailabilityEmail(availableSlots, contactName) {
 }
 
 // Send scheduling response email
-async function sendSchedulingResponse(userId, toEmail, subject, body, originalThreadId, originalMessageId) {
+async function sendSchedulingResponse(userId, toEmail, subject, body, originalThreadId, responseMessageId, yourOriginalMessageId) {
     try {
         console.log(`📧 Sending scheduling response to ${toEmail} in thread ${originalThreadId}`);
         
@@ -2894,8 +2896,8 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
         const message = [
             `To: ${toEmail}`,
             `Subject: ${subject}`,
-            `In-Reply-To: ${originalMessageId}`,
-            `References: ${originalMessageId}`,
+            `In-Reply-To: ${responseMessageId}`,
+            `References: ${yourOriginalMessageId} ${responseMessageId}`,
             'Content-Type: text/plain; charset=utf-8',
             '',
             body
