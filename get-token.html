@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Get Auth Token</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .token-box {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            word-break: break-all;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .copied {
+            color: green;
+            margin-top: 10px;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Get Auth Token for Testing</h1>
+
+    <div id="status"></div>
+
+    <div id="token-container" style="display: none;">
+        <h2>Your Auth Token:</h2>
+        <div class="token-box" id="token-display"></div>
+        <button onclick="copyToken()">Copy Token</button>
+        <div id="copy-status"></div>
+    </div>
+
+    <div id="instructions">
+        <h2>Instructions:</h2>
+        <ol>
+            <li>Make sure you're logged in at <a href="http://localhost:8081" target="_blank">http://localhost:8081</a></li>
+            <li>This page will automatically detect your auth token from localStorage</li>
+            <li>Copy the token and paste it into test-workflow.js</li>
+        </ol>
+    </div>
+
+    <script>
+        function getToken() {
+            // Try to get token from current page
+            let token = localStorage.getItem('authToken');
+
+            if (!token) {
+                // Try alternative key
+                token = localStorage.getItem('token');
+            }
+
+            if (!token) {
+                // Try to get from window._authToken
+                token = window._authToken;
+            }
+
+            if (token) {
+                document.getElementById('token-display').textContent = token;
+                document.getElementById('token-container').style.display = 'block';
+                document.getElementById('status').innerHTML = '<p style="color: green;">✅ Token found!</p>';
+            } else {
+                document.getElementById('status').innerHTML = `
+                    <p class="error">❌ No token found.</p>
+                    <p>Please:</p>
+                    <ol>
+                        <li>Open <a href="http://localhost:8081" target="_blank">http://localhost:8081</a> in another tab</li>
+                        <li>Log in with Google</li>
+                        <li>Come back to this page and refresh</li>
+                    </ol>
+                    <p><button onclick="location.reload()">Refresh Page</button></p>
+                `;
+            }
+        }
+
+        function copyToken() {
+            const token = document.getElementById('token-display').textContent;
+            navigator.clipboard.writeText(token).then(() => {
+                document.getElementById('copy-status').innerHTML = '<p class="copied">✅ Token copied to clipboard!</p>';
+                setTimeout(() => {
+                    document.getElementById('copy-status').innerHTML = '';
+                }, 3000);
+            }).catch(err => {
+                document.getElementById('copy-status').innerHTML = '<p class="error">❌ Failed to copy. Please select and copy manually.</p>';
+            });
+        }
+
+        // Check for token on page load
+        getToken();
+
+        // Also check periodically in case user logs in
+        setInterval(getToken, 2000);
+    </script>
+</body>
+</html>

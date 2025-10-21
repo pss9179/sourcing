@@ -83,7 +83,8 @@ class WorkflowBuilder {
         document.getElementById('refresh').addEventListener('click', () => this.refresh());
 
         // Config panel
-        document.getElementById('closeConfig').addEventListener('click', () => this.closeConfigPanel());
+        // Config panel removed - using modals instead
+        // document.getElementById('closeConfig').addEventListener('click', () => this.closeConfigPanel());
 
         // Run Workflow button
         document.getElementById('runWorkflowBtn').addEventListener('click', () => this.runWorkflow());
@@ -436,6 +437,12 @@ class WorkflowBuilder {
                 const result = await response.json();
                 alert(`✅ Cadence started! ${result.emailsScheduled} emails scheduled.\n\nCheck the server logs to see emails being sent!`);
                 document.querySelector('.modal').remove();
+
+                // Start polling for workflow status updates
+                if (result.cadenceId && statusManager) {
+                    statusManager.startPolling(result.cadenceId, 30);
+                    console.log('📊 Started polling for workflow status updates');
+                }
             } else {
                 const errorData = await response.json();
                 alert(`❌ Error starting cadence: ${errorData.error || 'Unknown error'}`);
@@ -707,10 +714,12 @@ class WorkflowBuilder {
 
     getDelayDescription(config) {
         if (!config.delayType) return '';
-        
+
         switch(config.delayType) {
             case 'immediate':
                 return 'Send immediately';
+            case 'seconds':
+                return `After ${config.delayValue} sec`;
             case 'minutes':
                 return `After ${config.delayValue} min`;
             case 'days':
@@ -986,11 +995,15 @@ class WorkflowBuilder {
 
         const nodeElement = document.getElementById(nodeData.id);
         nodeElement.classList.add('selected');
-        
-        this.showConfigPanel(nodeData);
+
+        // Config panel removed - nodes use modals now
+        // this.showConfigPanel(nodeData);
     }
 
     showConfigPanel(nodeData) {
+        // Config panel removed - this function is no longer used
+        return;
+
         const configPanel = document.getElementById('configPanel');
         const configTitle = document.getElementById('configTitle');
         const configContent = document.getElementById('configContent');
@@ -1149,14 +1162,15 @@ class WorkflowBuilder {
                         <label style="display: block; margin-bottom: 5px; font-weight: 600;">When to Send:</label>
                         <select id="delayType" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 10px;">
                             <option value="immediate" ${node.config?.delayType === 'immediate' ? 'selected' : ''}>Send Immediately</option>
+                            <option value="seconds" ${node.config?.delayType === 'seconds' ? 'selected' : ''}>After X Seconds</option>
                             <option value="minutes" ${node.config?.delayType === 'minutes' ? 'selected' : ''}>After X Minutes</option>
                             <option value="days" ${node.config?.delayType === 'days' ? 'selected' : ''}>After X Days</option>
                             <option value="specific" ${node.config?.delayType === 'specific' ? 'selected' : ''}>Specific Date & Time</option>
                         </select>
-                        
+
                         <div id="delayValueContainer" style="display: ${node.config?.delayType && node.config?.delayType !== 'immediate' ? 'block' : 'none'};">
                             <input type="number" id="delayValueNumber" value="${node.config?.delayValue || 1}" min="1"
-                                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; display: ${node.config?.delayType === 'minutes' || node.config?.delayType === 'days' ? 'block' : 'none'};">
+                                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; display: ${node.config?.delayType === 'seconds' || node.config?.delayType === 'minutes' || node.config?.delayType === 'days' ? 'block' : 'none'};">
                             <input type="datetime-local" id="delayValueDate" value="${node.config?.delayValue || ''}"
                                 style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; display: ${node.config?.delayType === 'specific' ? 'block' : 'none'};">
                         </div>
@@ -1193,12 +1207,12 @@ class WorkflowBuilder {
             const container = document.getElementById('delayValueContainer');
             const numberInput = document.getElementById('delayValueNumber');
             const dateInput = document.getElementById('delayValueDate');
-            
+
             if (delayType === 'immediate') {
                 container.style.display = 'none';
             } else {
                 container.style.display = 'block';
-                if (delayType === 'minutes' || delayType === 'days') {
+                if (delayType === 'seconds' || delayType === 'minutes' || delayType === 'days') {
                     numberInput.style.display = 'block';
                     dateInput.style.display = 'none';
                 } else if (delayType === 'specific') {
@@ -1272,10 +1286,10 @@ class WorkflowBuilder {
         // Save delay configuration
         const delayType = document.getElementById('delayType').value;
         node.config.delayType = delayType;
-        
+
         if (delayType === 'immediate') {
             node.config.delayValue = 0;
-        } else if (delayType === 'minutes' || delayType === 'days') {
+        } else if (delayType === 'seconds' || delayType === 'minutes' || delayType === 'days') {
             node.config.delayValue = parseInt(document.getElementById('delayValueNumber').value) || 1;
         } else if (delayType === 'specific') {
             node.config.delayValue = document.getElementById('delayValueDate').value;
@@ -1304,30 +1318,30 @@ class WorkflowBuilder {
             alert('Please add nodes to your workflow');
             return;
         }
-        
+
         const startNode = this.nodes.find(n => n.type === 'start');
         if (!startNode) {
             alert('Workflow must have a Start node');
             return;
         }
-        
-        const emailNodes = this.nodes.filter(n => 
+
+        const emailNodes = this.nodes.filter(n =>
             ['email', 'followup-email', 'followup-email2', 'new-email'].includes(n.type)
         );
-        
+
         if (emailNodes.length === 0) {
             alert('Workflow must have at least one Email node');
             return;
         }
-        
+
         // Check if all email nodes are configured
         const unconfiguredNodes = emailNodes.filter(n => !n.config?.to || !n.config?.subject || !n.config?.template);
         if (unconfiguredNodes.length > 0) {
             alert('Please configure all email nodes (recipient, subject, and message required)');
             return;
         }
-        
-        // Execute workflow
+
+        // Execute workflow with cadence tracking (using special contact ID -1 for test runs)
         console.log('🚀 Running workflow...');
         try {
             const response = await fetch('http://localhost:3000/api/workflow/run', {
@@ -1341,10 +1355,16 @@ class WorkflowBuilder {
                     connections: this.connections
                 })
             });
-            
+
             if (response.ok) {
                 const result = await response.json();
                 alert(`✅ Workflow executed successfully!\n\n${result.message}`);
+
+                // Start polling for workflow status updates if cadenceId is returned
+                if (result.cadenceId && statusManager) {
+                    statusManager.startPolling(result.cadenceId, 30);
+                    console.log('📊 Started polling for workflow status updates');
+                }
             } else if (response.status === 401 || response.status === 403) {
                 // Token expired or invalid - clear and prompt re-login
                 localStorage.removeItem('authToken');
@@ -2048,10 +2068,203 @@ class WorkflowBuilder {
     }
 }
 
+// Notification System
+class NotificationManager {
+    static show(title, message, type = 'info', duration = 5000) {
+        const notification = document.createElement('div');
+        notification.className = `workflow-notification ${type}`;
+
+        const icons = {
+            success: 'fa-check-circle',
+            error: 'fa-exclamation-circle',
+            warning: 'fa-exclamation-triangle',
+            info: 'fa-info-circle'
+        };
+
+        notification.innerHTML = `
+            <div class="notification-header">
+                <div class="notification-title">
+                    <i class="fas ${icons[type]}"></i>
+                    ${title}
+                </div>
+                <button class="notification-close">&times;</button>
+            </div>
+            <div class="notification-body">${message}</div>
+        `;
+
+        document.body.appendChild(notification);
+
+        const closeBtn = notification.querySelector('.notification-close');
+        closeBtn.addEventListener('click', () => {
+            notification.style.animation = 'slideInRight 0.3s ease-out reverse';
+            setTimeout(() => notification.remove(), 300);
+        });
+
+        if (duration > 0) {
+            setTimeout(() => {
+                if (notification.parentElement) {
+                    notification.style.animation = 'slideInRight 0.3s ease-out reverse';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, duration);
+        }
+
+        return notification;
+    }
+}
+
+// Workflow Status Manager
+class WorkflowStatusManager {
+    constructor() {
+        this.pollingInterval = null;
+        this.currentCadenceId = null;
+    }
+
+    startPolling(cadenceId, intervalSeconds = 30) {
+        this.currentCadenceId = cadenceId;
+        this.stopPolling();
+
+        // Check immediately
+        this.checkForUpdates();
+
+        // Then check periodically
+        this.pollingInterval = setInterval(() => {
+            this.checkForUpdates();
+        }, intervalSeconds * 1000);
+    }
+
+    stopPolling() {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
+    }
+
+    async checkForUpdates() {
+        if (!this.currentCadenceId) return;
+
+        try {
+            const token = workflowBuilder.authToken;
+            if (!token) {
+                console.warn('No auth token available for status check');
+                return;
+            }
+
+            const response = await fetch(
+                `http://localhost:3000/api/cadences/${this.currentCadenceId}/execution-status`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                }
+            );
+
+            if (response.ok) {
+                const data = await response.json();
+                this.updateNodeStatuses(data);
+                this.checkForNewReplies(data);
+            }
+        } catch (error) {
+            console.error('Error checking workflow status:', error);
+        }
+    }
+
+    updateNodeStatuses(statusData) {
+        // Remove all existing badges
+        document.querySelectorAll('.node-status-badge').forEach(badge => badge.remove());
+
+        if (!statusData.contacts || statusData.contacts.length === 0) return;
+
+        // Aggregate status across all contacts for each node
+        const nodeStatuses = {};
+
+        statusData.contacts.forEach(contact => {
+            contact.emails.forEach(email => {
+                if (!nodeStatuses[email.nodeId]) {
+                    nodeStatuses[email.nodeId] = {
+                        pending: 0,
+                        sent: 0,
+                        cancelled: 0
+                    };
+                }
+
+                if (email.status === 'pending') {
+                    nodeStatuses[email.nodeId].pending++;
+                } else if (email.status === 'sent' || email.sentAt) {
+                    nodeStatuses[email.nodeId].sent++;
+                } else if (email.status === 'cancelled') {
+                    nodeStatuses[email.nodeId].cancelled++;
+                }
+            });
+        });
+
+        // Add badges to nodes
+        Object.keys(nodeStatuses).forEach(nodeId => {
+            const nodeElement = document.getElementById(nodeId);
+            if (!nodeElement) return;
+
+            const stats = nodeStatuses[nodeId];
+            let badgeHTML = '';
+            let badgeClass = '';
+            let badgeText = '';
+
+            if (stats.cancelled > 0) {
+                badgeClass = 'cancelled';
+                badgeText = `${stats.cancelled} cancelled`;
+            } else if (stats.sent > 0) {
+                badgeClass = 'sent';
+                badgeText = `${stats.sent} sent`;
+            } else if (stats.pending > 0) {
+                badgeClass = 'pending';
+                badgeText = `${stats.pending} pending`;
+            }
+
+            if (badgeText) {
+                const badge = document.createElement('div');
+                badge.className = `node-status-badge ${badgeClass}`;
+                badge.innerHTML = badgeText;
+                nodeElement.appendChild(badge);
+            }
+        });
+    }
+
+    checkForNewReplies(statusData) {
+        if (!statusData.contacts) return;
+
+        const repliedContacts = statusData.contacts.filter(c => c.hasReplied && c.workflowBroken);
+
+        // Store last known replied contacts to detect new ones
+        if (!this.lastRepliedContacts) {
+            this.lastRepliedContacts = new Set();
+        }
+
+        repliedContacts.forEach(contact => {
+            const key = `${contact.contactId}`;
+            if (!this.lastRepliedContacts.has(key)) {
+                // New reply detected!
+                this.lastRepliedContacts.add(key);
+
+                const cancelledCount = contact.emails.filter(e => e.status === 'cancelled').length;
+
+                NotificationManager.show(
+                    'Workflow Stopped',
+                    `<strong>${contact.contactName || contact.contactEmail}</strong> has replied! ${cancelledCount} pending email(s) have been automatically cancelled.`,
+                    'info',
+                    8000
+                );
+            }
+        });
+    }
+}
+
 // Initialize
 let workflowBuilder;
 let currentUser = null;
+let statusManager = new WorkflowStatusManager();
 
 document.addEventListener('DOMContentLoaded', () => {
     workflowBuilder = new WorkflowBuilder();
+
+    // Start polling for status updates if a cadence is active
+    // This will be triggered when a cadence is loaded/executed
 });

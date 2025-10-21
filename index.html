@@ -25,10 +25,6 @@
                     <i class="fas fa-envelope"></i>
                     <span>Email</span>
                 </div>
-                <div class="component-item" draggable="true" data-type="end">
-                    <i class="fas fa-stop"></i>
-                    <span>End</span>
-                </div>
             </div>
         </div>
         
@@ -86,18 +82,7 @@
                 <div class="workflow-nodes" id="workflowNodes">
                     <!-- Workflow nodes will be added here -->
                 </div>
-                
-                <!-- Connection Instructions -->
-                <div class="connection-instructions" id="connectionInstructions">
-                    <div class="instruction-content">
-                        <h4>How to Connect Nodes:</h4>
-                        <p>1. <strong>Click and drag</strong> from any blue dot on a node</p>
-                        <p>2. <strong>Drag to any blue dot</strong> on another node to connect them</p>
-                        <p>3. <strong>Release</strong> to create the connection</p>
-                        <button id="closeInstructions">Got it!</button>
-                    </div>
-                </div>
-                
+
                 <div class="canvas-controls">
                     <button class="control-btn" id="zoomIn">
                         <i class="fas fa-plus"></i>
@@ -140,19 +125,6 @@
                     </div>
                     <div id="contactsList"></div>
                 </div>
-            </div>
-        </div>
-        
-        <!-- Right Configuration Panel -->
-        <div class="config-panel" id="configPanel">
-            <div class="config-header">
-                <h3 id="configTitle">Select a node to configure</h3>
-                <button class="close-config" id="closeConfig">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            <div class="config-content" id="configContent">
-                <p>Click on a workflow node to configure its properties.</p>
             </div>
         </div>
     </div>
@@ -205,14 +177,7 @@
                     window.location.href = 'http://localhost:3000/auth/google';
                 });
             }
-            
-            const closeInstructionsBtn = document.getElementById('closeInstructions');
-            if (closeInstructionsBtn) {
-                closeInstructionsBtn.addEventListener('click', () => {
-                    document.getElementById('connectionInstructions').style.display = 'none';
-                });
-            }
-            
+
             if (token) {
                 // Verify token
                 fetch('http://localhost:3000/api/user', {

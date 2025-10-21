@@ -506,14 +506,9 @@ body {
 }
 
 /* Right Configuration Panel */
+/* Config panel removed - using modals instead */
 .config-panel {
-    width: 320px;
-    background: white;
-    border-left: 1px solid #e1e5e9;
-    display: flex;
-    flex-direction: column;
-    max-height: 100vh;
-    overflow-y: auto;
+    display: none !important;
 }
 
 .config-header {
@@ -1019,4 +1014,256 @@ body {
     font-size: 20px;
     margin-bottom: 10px;
     color: #1f2937;
+}
+
+/* Workflow Status Badges */
+.node-status-badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.node-status-badge.pending {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    color: #92400e;
+    border: 1px solid #fbbf24;
+}
+
+.node-status-badge.sent {
+    background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+    color: #065f46;
+    border: 1px solid #10b981;
+}
+
+.node-status-badge.cancelled {
+    background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+    color: #991b1b;
+    border: 1px solid #ef4444;
+}
+
+.node-status-badge.replied {
+    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+    color: #1e40af;
+    border: 1px solid #3b82f6;
+}
+
+/* Workflow Broken Notification */
+.workflow-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    max-width: 400px;
+    z-index: 10000;
+    animation: slideInRight 0.3s ease-out;
+    border-left: 4px solid #3b82f6;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.workflow-notification.success {
+    border-left-color: #10b981;
+}
+
+.workflow-notification.warning {
+    border-left-color: #f59e0b;
+}
+
+.workflow-notification.error {
+    border-left-color: #ef4444;
+}
+
+.workflow-notification.info {
+    border-left-color: #3b82f6;
+}
+
+.notification-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.notification-title {
+    font-weight: 600;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notification-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: #6b7280;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.notification-close:hover {
+    background: #f3f4f6;
+    color: #1f2937;
+}
+
+.notification-body {
+    font-size: 13px;
+    color: #4b5563;
+    line-height: 1.5;
+}
+
+/* Execution Status Panel */
+.execution-status-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 400px;
+    background: white;
+    border-left: 1px solid #e1e5e9;
+    box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+    transform: translateX(100%);
+    transition: transform 0.3s ease-out;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+}
+
+.execution-status-panel.open {
+    transform: translateX(0);
+}
+
+.execution-status-header {
+    padding: 20px;
+    border-bottom: 1px solid #e1e5e9;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.execution-status-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.execution-status-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.contact-status-card {
+    background: #f9fafb;
+    border: 1px solid #e1e5e9;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.contact-status-card.replied {
+    border-left: 4px solid #3b82f6;
+}
+
+.contact-status-card.active {
+    border-left: 4px solid #10b981;
+}
+
+.contact-status-card.broken {
+    border-left: 4px solid #ef4444;
+}
+
+.contact-info {
+    margin-bottom: 12px;
+}
+
+.contact-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: #1f2937;
+}
+
+.contact-email {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.email-status-list {
+    margin-top: 12px;
+}
+
+.email-status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background: white;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+
+.email-status-item .status-icon {
+    font-size: 14px;
+}
+
+.email-status-item.pending .status-icon {
+    color: #f59e0b;
+}
+
+.email-status-item.sent .status-icon {
+    color: #10b981;
+}
+
+.email-status-item.cancelled .status-icon {
+    color: #ef4444;
+}
+
+.reply-info {
+    margin-top: 12px;
+    padding: 12px;
+    background: #eff6ff;
+    border-radius: 6px;
+    border: 1px solid #bfdbfe;
+}
+
+.reply-info-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e40af;
+    margin-bottom: 4px;
+}
+
+.reply-info-body {
+    font-size: 11px;
+    color: #1e3a8a;
 }
