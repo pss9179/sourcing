@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const session = require('express-session');
 const passport = require('passport');
@@ -37,6 +38,9 @@ app.use(session({
 }));
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Serve static files from the parent directory (where index.html is located)
+app.use(express.static(path.join(__dirname, '..')));
 
 // Database setup
 const db = new sqlite3.Database('./cadenceflow.db');
@@ -106,7 +110,414 @@ db.serialize(() => {
         FOREIGN KEY (contact_id) REFERENCES contacts (id),
         FOREIGN KEY (cadence_id) REFERENCES cadences (id)
     )`);
+
+    // Email responses table
+    db.run(`CREATE TABLE IF NOT EXISTS email_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        contact_id INTEGER,
+        cadence_id INTEGER,
+        original_message_id TEXT,
+        response_message_id TEXT,
+        response_subject TEXT,
+        response_body TEXT,
+        response_from TEXT,
+        response_date DATETIME,
+        is_read BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id),
+        FOREIGN KEY (contact_id) REFERENCES contacts (id),
+        FOREIGN KEY (cadence_id) REFERENCES cadences (id)
+    )`);
+
+    // Email logs table (for tracking sent emails)
+    db.run(`CREATE TABLE IF NOT EXISTS email_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        contact_id INTEGER,
+        cadence_id INTEGER,
+        message_id TEXT UNIQUE,
+        thread_id TEXT,
+        subject TEXT,
+        sent_to TEXT,
+        sent_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id),
+        FOREIGN KEY (contact_id) REFERENCES contacts (id),
+        FOREIGN KEY (cadence_id) REFERENCES cadences (id)
+    )`);
 });
+
+// Helper function to log sent emails
+function logSentEmail(userId, contactId, cadenceId, messageId, threadId, subject, sentTo) {
+    return new Promise((resolve, reject) => {
+        db.run(`
+            INSERT INTO email_logs (user_id, contact_id, cadence_id, message_id, thread_id, subject, sent_to, sent_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `, [userId, contactId, cadenceId, messageId, threadId, subject, sentTo], function(err) {
+            if (err) {
+                console.error('Error logging sent email:', err);
+                reject(err);
+            } else {
+                console.log(`📧 Email logged with ID: ${this.lastID}`);
+                resolve(this.lastID);
+            }
+        });
+    });
+}
+
+// Helper function to log email responses
+function logEmailResponse(userId, contactId, cadenceId, originalMessageId, responseMessageId, responseSubject, responseBody, responseFrom, responseDate) {
+    return new Promise((resolve, reject) => {
+        db.run(`
+            INSERT INTO email_responses (user_id, contact_id, cadence_id, original_message_id, response_message_id, response_subject, response_body, response_from, response_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [userId, contactId, cadenceId, originalMessageId, responseMessageId, responseSubject, responseBody, responseFrom, responseDate], function(err) {
+            if (err) {
+                console.error('Error logging email response:', err);
+                reject(err);
+            } else {
+                console.log(`📬 Response logged with ID: ${this.lastID}`);
+                resolve(this.lastID);
+            }
+        });
+    });
+}
+
+// Helper function to determine if an email is a legitimate reply (not auto-reply or bounce)
+function isLegitimateReply(subject, from) {
+    if (!subject || !from) return false;
+    
+    const subjectLower = subject.toLowerCase();
+    const fromLower = from.toLowerCase();
+    
+    // Check for auto-reply indicators
+    const autoReplyIndicators = [
+        'out of office',
+        'out of the office',
+        'auto-reply',
+        'automatic reply',
+        'vacation',
+        'away',
+        'no-reply',
+        'noreply',
+        'mail delivery failure',
+        'undeliverable',
+        'delivery status notification',
+        'bounce',
+        'returned mail',
+        'mail system error'
+    ];
+    
+    // Check if it's an auto-reply
+    for (const indicator of autoReplyIndicators) {
+        if (subjectLower.includes(indicator) || fromLower.includes(indicator)) {
+            return false;
+        }
+    }
+    
+    // Check for legitimate reply patterns
+    const replyPatterns = [
+        /^re:\s*/i,
+        /^re\[\d+\]:\s*/i,
+        /^fwd:\s*/i,
+        /^fwd\[\d+\]:\s*/i
+    ];
+    
+    // Must contain "Re:" or "Fwd:" or be a direct reply
+    const hasReplyPrefix = replyPatterns.some(pattern => pattern.test(subject));
+    
+    // Check for external email indicators that might break threading
+    const externalIndicators = ['[external]', '[external email]', '[student]', '[staff]'];
+    const hasExternalIndicator = externalIndicators.some(indicator => 
+        subjectLower.includes(indicator.toLowerCase())
+    );
+    
+    // If it has external indicators, check if it still looks like a reply
+    if (hasExternalIndicator) {
+        // Look for "Re:" after the external indicator
+        const reIndex = subjectLower.indexOf('re:');
+        const externalIndex = subjectLower.indexOf('[external');
+        return reIndex > externalIndex;
+    }
+    
+    return hasReplyPrefix;
+}
+
+// Helper function to extract message body from Gmail API payload
+function extractMessageBody(payload) {
+    let body = '';
+    
+    if (payload.body && payload.body.data) {
+        body = Buffer.from(payload.body.data, 'base64').toString();
+    } else if (payload.parts) {
+        for (const part of payload.parts) {
+            if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+                body = Buffer.from(part.body.data, 'base64').toString();
+                break;
+            } else if (part.mimeType === 'text/html' && part.body && part.body.data) {
+                // Fallback to HTML if no plain text
+                const htmlBody = Buffer.from(part.body.data, 'base64').toString();
+                // Simple HTML to text conversion
+                body = htmlBody.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+                break;
+            }
+        }
+    }
+    
+    return body.substring(0, 2000); // Limit body length
+}
+
+// Function to check for email responses
+async function checkForEmailResponses(userId) {
+    console.log(`🔍 Checking for email responses for user ${userId}...`);
+    
+    try {
+        // Get user's Gmail credentials
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!user || !user.access_token) {
+            console.log('❌ User not authenticated with Gmail');
+            return { responsesFound: 0, errors: ['User not authenticated'] };
+        }
+
+        const { google } = require('googleapis');
+        
+        // Create OAuth2 client
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+        // First, let's test Gmail API access by checking recent emails
+        console.log('🧪 Testing Gmail API access...');
+        try {
+            const testResponse = await gmail.users.messages.list({
+                userId: 'me',
+                q: 'in:inbox',
+                maxResults: 5
+            });
+            console.log(`✅ Gmail API working - found ${testResponse.data.messages ? testResponse.data.messages.length : 0} recent emails in inbox`);
+        } catch (testError) {
+            console.error('❌ Gmail API test failed:', testError.message);
+        }
+
+        // Get all sent emails for this user
+        const sentEmails = await new Promise((resolve, reject) => {
+            db.all(`
+                SELECT el.*, c.email as contact_email, c.name as contact_name
+                FROM email_logs el
+                JOIN contacts c ON el.contact_id = c.id
+                WHERE el.user_id = ? AND el.sent_at > datetime('now', '-30 days')
+                ORDER BY el.sent_at DESC
+            `, [userId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+        
+        console.log(`📧 Found ${sentEmails.length} sent emails to check for responses`);
+
+        let responsesFound = 0;
+        const errors = [];
+
+        for (const sentEmail of sentEmails) {
+            try {
+                console.log(`🔍 Checking thread ${sentEmail.thread_id} for responses...`);
+                
+                // Method 1: Get the entire thread and check all messages (recommended approach)
+                console.log(`📧 Getting full thread details for thread: ${sentEmail.thread_id}`);
+                const threadResponse = await gmail.users.threads.get({
+                    userId: 'me',
+                    id: sentEmail.thread_id,
+                    format: 'full'
+                });
+                
+                console.log(`📬 Thread contains ${threadResponse.data.messages ? threadResponse.data.messages.length : 0} messages`);
+
+                if (threadResponse.data.messages && threadResponse.data.messages.length > 0) {
+                    console.log(`📬 Processing ${threadResponse.data.messages.length} messages in thread`);
+                    
+                    for (const message of threadResponse.data.messages) {
+                        // Skip the original sent message
+                        if (message.id === sentEmail.message_id) {
+                            console.log(`⏭️  Skipping original sent message: ${message.id}`);
+                            continue;
+                        }
+
+                        // Check if we already logged this response
+                        const existingResponse = await new Promise((resolve, reject) => {
+                            db.get(`
+                                SELECT id FROM email_responses 
+                                WHERE response_message_id = ? AND user_id = ?
+                            `, [message.id, userId], (err, row) => {
+                                if (err) reject(err);
+                                else resolve(row);
+                            });
+                        });
+
+                        if (existingResponse) {
+                            console.log(`⏭️  Message ${message.id} already logged, skipping`);
+                            continue; // Already logged this response
+                        }
+
+                        // Get message details from thread data
+                        const headers = message.payload.headers;
+                        const fromHeader = headers.find(h => h.name === 'From');
+                        const subjectHeader = headers.find(h => h.name === 'Subject');
+                        const dateHeader = headers.find(h => h.name === 'Date');
+                        const inReplyToHeader = headers.find(h => h.name === 'In-Reply-To');
+                        const messageIdHeader = headers.find(h => h.name === 'Message-ID');
+
+                        const subject = subjectHeader ? subjectHeader.value : 'No Subject';
+                        const from = fromHeader ? fromHeader.value : 'Unknown';
+                        const date = dateHeader ? new Date(dateHeader.value) : new Date();
+                        
+                        // Use the In-Reply-To header which contains the original email's Message-ID
+                        // This is what the person is actually replying to
+                        const originalMessageId = inReplyToHeader ? inReplyToHeader.value : sentEmail.message_id;
+                        
+                        // Check if this is a reply from someone other than the sender
+                        if (from.toLowerCase().includes(user.email.toLowerCase())) {
+                            console.log(`⏭️  Skipping message from self: ${from}`);
+                            continue;
+                        }
+                        
+                        // Check if this is a legitimate reply (not auto-reply or bounce)
+                        if (!isLegitimateReply(subject, from)) {
+                            console.log(`⏭️  Skipping auto-reply/bounce: ${subject}`);
+                            continue;
+                        }
+                        
+                        // Extract email body using helper function
+                        const body = extractMessageBody(message.payload);
+
+                            // Log the response
+                            await logEmailResponse(
+                                userId,
+                                sentEmail.contact_id,
+                                sentEmail.cadence_id,
+                                sentEmail.message_id,
+                                message.id,
+                                subject,
+                                body,
+                                from,
+                                date
+                            );
+
+                            responsesFound++;
+                            console.log(`✅ New response logged: ${from} - ${subject}`);
+                            
+                            // Check for scheduling intent and handle automatically
+                            try {
+                                await handleSchedulingResponse(userId, from, body, sentEmail.contact_id, sentEmail.thread_id, originalMessageId);
+                            } catch (schedulingError) {
+                                console.error('❌ Error handling scheduling response:', schedulingError);
+                            }
+                    }
+                }
+            } catch (error) {
+                console.error(`Error checking responses for email ${sentEmail.message_id}:`, error.message);
+                errors.push(`Error checking email ${sentEmail.message_id}: ${error.message}`);
+                
+                // Try fallback search by subject
+                try {
+                    console.log(`🔄 Trying fallback search for subject: "${sentEmail.subject}"`);
+                    const fallbackQuery = `subject:"${sentEmail.subject}" -from:${user.email}`;
+                    const fallbackResponse = await gmail.users.messages.list({
+                        userId: 'me',
+                        q: fallbackQuery,
+                        maxResults: 5
+                    });
+                    
+                    if (fallbackResponse.data.messages && fallbackResponse.data.messages.length > 0) {
+                        console.log(`✅ Fallback search found ${fallbackResponse.data.messages.length} potential responses`);
+                        
+                        for (const message of fallbackResponse.data.messages) {
+                            try {
+                                const messageDetails = await gmail.users.messages.get({
+                                    userId: 'me',
+                                    id: message.id,
+                                    format: 'full'
+                                });
+                                
+                                const headers = messageDetails.data.payload.headers;
+                                const subjectHeader = headers.find(h => h.name === 'Subject');
+                                const fromHeader = headers.find(h => h.name === 'From');
+                                const dateHeader = headers.find(h => h.name === 'Date');
+                                
+                                const subject = subjectHeader ? subjectHeader.value : 'No Subject';
+                                const from = fromHeader ? fromHeader.value : 'Unknown';
+                                const date = dateHeader ? new Date(dateHeader.value) : new Date();
+                                
+                                // Check if this is a legitimate reply
+                                if (!isLegitimateReply(subject, from)) {
+                                    console.log(`⏭️  Skipping auto-reply/bounce in fallback: ${subject}`);
+                                    continue;
+                                }
+                                
+                                // Check if already logged
+                                const existingResponse = await new Promise((resolve, reject) => {
+                                    db.get(`SELECT id FROM email_responses WHERE response_message_id = ? AND user_id = ?`, 
+                                        [message.id, userId], (err, row) => {
+                                        if (err) reject(err);
+                                        else resolve(row);
+                                    });
+                                });
+                                
+                                if (existingResponse) {
+                                    console.log(`⏭️  Fallback message ${message.id} already logged, skipping`);
+                                    continue;
+                                }
+                                
+                                const body = extractMessageBody(messageDetails.data.payload);
+                                
+                                await logEmailResponse(
+                                    userId,
+                                    sentEmail.contact_id,
+                                    sentEmail.cadence_id,
+                                    sentEmail.message_id,
+                                    message.id,
+                                    subject,
+                                    body,
+                                    from,
+                                    date
+                                );
+                                
+                                responsesFound++;
+                                console.log(`✅ New response logged via fallback: ${from} - ${subject}`);
+                            } catch (msgError) {
+                                console.error(`Error processing fallback message ${message.id}:`, msgError.message);
+                            }
+                        }
+                    }
+                } catch (fallbackError) {
+                    console.error('Fallback search also failed:', fallbackError.message);
+                }
+            }
+        }
+
+        console.log(`✅ Response check complete. Found ${responsesFound} new responses.`);
+        return { responsesFound, errors };
+
+    } catch (error) {
+        console.error('Error checking for email responses:', error);
+        return { responsesFound: 0, errors: [error.message] };
+    }
+}
 
 // Initialize API clients
 const openai = new OpenAI({
@@ -219,7 +630,7 @@ passport.deserializeUser((id, done) => {
 
 // Auth routes
 app.get('/auth/google', passport.authenticate('google', { 
-    scope: ['profile', 'email', 'https://www.googleapis.com/auth/gmail.send'],
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar'],
     accessType: 'offline',
     prompt: 'consent'
 }));
@@ -315,37 +726,53 @@ app.get('/api/cadences', authenticateToken, async (req, res) => {
 app.post('/api/contacts', authenticateToken, (req, res) => {
     const { email, name, company, title, firstName, lastName, linkedinUrl } = req.body;
     
-    // Check if contact already exists (by email or LinkedIn URL)
-    db.get(`SELECT * FROM contacts WHERE user_id = ? AND (email = ? OR linkedin_url = ?)`,
-        [req.user.userId, email, linkedinUrl],
-        (err, existing) => {
-            if (err) {
-                return res.status(500).json({ error: 'Database error' });
-            }
-            
-            if (existing) {
-                // Contact already exists - return the existing contact
-                console.log(`⚠️ Contact already exists: ${email}`);
-                return res.json({ 
-                    id: existing.id, 
-                    message: 'Contact already exists',
-                    alreadyExists: true 
-                });
-            }
-            
-            // Insert new contact
-            db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
+    // Check if contact already exists (by email only)
+    // TEMPORARY: Bypass duplicate check for test email
+    if (email === 'pss9179@stern.nyu.edu') {
+        console.log(`🧪 Test mode: Bypassing duplicate check for test email: ${email}`);
+        // Skip duplicate check and proceed to insert
+    } else {
+        db.get(`SELECT * FROM contacts WHERE user_id = ? AND email = ?`,
+            [req.user.userId, email],
+            (err, existing) => {
+                if (err) {
+                    return res.status(500).json({ error: 'Database error' });
+                }
+                
+                if (existing) {
+                    // Contact already exists - return the existing contact
+                    console.log(`⚠️ Contact already exists: ${email}`);
+                    return res.json({ 
+                        id: existing.id, 
+                        message: 'Contact already exists',
+                        alreadyExists: true 
+                    });
+                }
+                
+                // Insert new contact
+                insertNewContact();
+            });
+        return;
+    }
+    
+    // Function to insert new contact
+    function insertNewContact() {
+        db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
         function(err) {
             if (err) {
+                    console.error('Error adding contact:', err);
                 res.status(500).json({ error: 'Failed to add contact' });
             } else {
-                        console.log(`✅ New contact added: ${email}`);
-                        res.json({ id: this.lastID, message: 'Contact added successfully', alreadyExists: false });
+                    console.log(`✅ New contact added: ${email}`);
+                    res.json({ id: this.lastID, message: 'Contact added successfully', alreadyExists: false });
             }
-                });
         });
+    }
+    
+    // Call insertNewContact for test email or after duplicate check
+    insertNewContact();
 });
 
 // Get contacts
@@ -374,62 +801,75 @@ app.delete('/api/contacts/:id', authenticateToken, (req, res) => {
     });
 });
 
-// Find email using Apollo.io API
+// Find email using Hunter.io API
 app.post('/api/find-email', authenticateToken, async (req, res) => {
     const { firstName, lastName, company, domain } = req.body;
     
     try {
-        // Try RocketReach API
-        if (process.env.ROCKETREACH_API_KEY) {
-            console.log(`🔍 Looking up email for ${firstName} ${lastName} via RocketReach`);
+        // Hunter.io API temporarily disabled for testing
+        if (false && process.env.HUNTER_API_KEY && domain) {
+            console.log(`🔍 Looking up email for ${firstName} ${lastName} at ${domain} via Hunter.io`);
             
             try {
-                // RocketReach lookup
-                const searchResponse = await axios.post('https://api.rocketreach.co/v2/api/lookupProfile', {
-                    name: `${firstName} ${lastName}`,
-                    current_employer: company
-                }, {
-                    headers: {
-                        'Api-Key': process.env.ROCKETREACH_API_KEY,
-                        'Content-Type': 'application/json'
+                // Hunter.io domain search
+                const searchResponse = await axios.get(`https://api.hunter.io/v2/domain-search`, {
+                    params: {
+                        domain: domain,
+                        api_key: process.env.HUNTER_API_KEY,
+                        limit: 10
                     }
                 });
                 
-                if (searchResponse.data && searchResponse.data.emails && searchResponse.data.emails.length > 0) {
-                    const email = searchResponse.data.emails[0].email;
-                    console.log(`✅ Found email via RocketReach: ${email}`);
-                    return res.json({
-                        email: email,
-                        source: 'rocketreach',
-                        confidence: 'high'
+                if (searchResponse.data && searchResponse.data.data && searchResponse.data.data.emails) {
+                    const emails = searchResponse.data.data.emails;
+                    
+                    // Look for exact name match first
+                    const exactMatch = emails.find(email => {
+                        const emailName = email.value.split('@')[0].toLowerCase();
+                        const firstNameLower = firstName.toLowerCase();
+                        const lastNameLower = lastName.toLowerCase();
+                        
+                        return emailName.includes(firstNameLower) && emailName.includes(lastNameLower);
                     });
+                    
+                    if (exactMatch) {
+                        console.log(`✅ Found exact email match via Hunter.io: ${exactMatch.value}`);
+                        return res.json({
+                            email: exactMatch.value,
+                            source: 'hunter.io',
+                            confidence: 'high',
+                            verification: exactMatch.verification
+                        });
+                    }
+                    
+                    // If no exact match, return the first email found
+                    if (emails.length > 0) {
+                        console.log(`✅ Found email via Hunter.io: ${emails[0].value}`);
+                        return res.json({
+                            email: emails[0].value,
+                            source: 'hunter.io',
+                            confidence: 'medium',
+                            verification: emails[0].verification
+                        });
+                    }
                 }
-            } catch (rocketError) {
-                console.log('RocketReach error:', rocketError.response?.data || rocketError.message);
+            } catch (hunterError) {
+                console.log('Hunter.io error:', hunterError.response?.data || hunterError.message);
             }
         }
         
-        // Fallback: Generate educated guesses
-        if (domain) {
-            // Clean names - remove special characters, spaces, parentheses
-            const cleanFirst = firstName.toLowerCase().replace(/[^a-z]/g, '');
-            const cleanLast = lastName.toLowerCase().replace(/[^a-z]/g, '');
-            
-            const patterns = [
-                `${cleanFirst}.${cleanLast}@${domain}`,
-                `${cleanFirst}${cleanLast}@${domain}`,
-                `${cleanFirst.charAt(0)}${cleanLast}@${domain}`,
-                `${cleanFirst}@${domain}`
-            ];
-            
-            console.log(`💡 Suggesting email patterns for ${domain} (cleaned: ${cleanFirst} ${cleanLast})`);
-            return res.json({
-                suggestions: patterns,
-                source: 'pattern',
-                confidence: 'low',
-                message: 'Using email pattern guesses.'
-            });
-        }
+        // Test mode: Always suggest test email for easy testing
+        console.log(`🧪 Test mode: Suggesting test email for ${firstName} ${lastName}`);
+        return res.json({
+            suggestions: [
+                'pss9179@stern.nyu.edu',  // Your test email
+                'test@example.com',
+                'testuser@company.com'
+            ],
+            source: 'test-mode',
+            confidence: 'low',
+            message: 'Test mode: Use one of the suggested test emails for testing response detection.'
+        });
         
         res.json({ 
             email: null, 
@@ -760,6 +1200,16 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
             const result = await sendDirectEmail(user, firstEmail.to, firstEmail.subject, firstEmail.body, null, fakeMessageId);
             threadId = result.threadId;
             console.log(`   ✅ Thread established: ${threadId}`);
+            
+            // Log the sent email for response tracking
+            try {
+                console.log(`📧 Logging first email: userId=${userId}, contactId=${contact ? contact.id : null}, messageId=${result.messageId}, threadId=${result.threadId}`);
+                await logSentEmail(userId, contact ? contact.id : null, null, result.messageId, result.threadId, firstEmail.subject, firstEmail.to);
+                console.log('✅ First email logged successfully');
+            } catch (logError) {
+                console.error('❌ Error logging first email:', logError);
+            }
+            
             results.emailsSent++;
         } catch (error) {
             console.error(`   ❌ Failed to send first email: ${error.message}`);
@@ -787,6 +1237,16 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
             try {
                 const result = await sendDirectEmail(user, email.to, email.subject, email.body, capturedThreadId, capturedMessageId);
                 console.log(`   ✅ Email sent in thread: ${result.threadId}`);
+                
+                // Log the sent email for response tracking
+                try {
+                    console.log(`📧 Logging immediate email: userId=${userId}, contactId=${contact ? contact.id : null}, messageId=${result.messageId}, threadId=${result.threadId}`);
+                    await logSentEmail(userId, contact ? contact.id : null, null, result.messageId, result.threadId, email.subject, email.to);
+                    console.log('✅ Immediate email logged successfully');
+                } catch (logError) {
+                    console.error('❌ Error logging immediate email:', logError);
+                }
+                
                 results.emailsSent++;
             } catch (error) {
                 console.error(`   ❌ Failed to send email: ${error.message}`);
@@ -799,8 +1259,17 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
             
             setTimeout(async () => {
                 try {
-                    await sendDirectEmail(user, email.to, email.subject, email.body, capturedThreadId, capturedMessageId);
+                    const result = await sendDirectEmail(user, email.to, email.subject, email.body, capturedThreadId, capturedMessageId);
                     console.log(`   ✅ Scheduled email sent to ${email.to} in thread ${capturedThreadId}`);
+                    
+                    // Log the sent email for response tracking
+                    try {
+                        console.log(`📧 Logging scheduled email: userId=${userId}, contactId=${contact ? contact.id : null}, messageId=${result.messageId}, threadId=${result.threadId}`);
+                        await logSentEmail(userId, contact ? contact.id : null, null, result.messageId, result.threadId, email.subject, email.to);
+                        console.log('✅ Scheduled email logged successfully');
+                    } catch (logError) {
+                        console.error('❌ Error logging scheduled email:', logError);
+                    }
                 } catch (error) {
                     console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
                 }
@@ -877,11 +1346,37 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
     
     console.log(`   ✅ Email sent! Message ID: ${result.data.id}, Thread ID: ${result.data.threadId}`);
     
-    // Generate the SMTP Message-ID in Gmail's format
-    // Gmail uses a specific format based on the message ID
-    const messageId = `<${result.data.id}@mail.gmail.com>`;
+    // Get the actual Message-ID from the sent email's headers
+    let messageId = `<${result.data.id}@mail.gmail.com>`; // fallback
     
-    console.log(`   📧 SMTP Message-ID: ${messageId}`);
+    try {
+        const sentMessage = await gmail.users.messages.get({
+            userId: 'me',
+            id: result.data.id
+        });
+        
+        const headers = sentMessage.data.payload.headers;
+        const messageIdHeader = headers.find(h => h.name === 'Message-ID');
+        if (messageIdHeader) {
+            messageId = messageIdHeader.value;
+            console.log(`   📧 Actual Message-ID: ${messageId}`);
+        } else {
+            console.log(`   📧 Using fallback Message-ID: ${messageId}`);
+        }
+    } catch (error) {
+        console.log(`   📧 Error getting Message-ID, using fallback: ${messageId}`);
+    }
+    
+    // Log the sent email for response tracking
+    // Note: This function doesn't have access to contactId, so we'll need to pass it
+    // For now, we'll log with contactId as null and update later if needed
+    try {
+        console.log(`📧 Logging sent email (direct): messageId=${result.data.id}, threadId=${result.data.threadId}`);
+        // We need to get the user ID and contact info to log properly
+        // This will be handled by the calling function
+    } catch (logError) {
+        console.error('❌ Error logging sent email (direct):', logError);
+    }
     
     return { 
         id: result.data.id, 
@@ -1078,6 +1573,16 @@ async function sendEmail(userId, contactId, subject, template) {
             });
             console.log('✅ ✅ ✅ CADENCE EMAIL SENT SUCCESSFULLY! ✅ ✅ ✅');
             console.log('   Message ID:', result.data.id);
+            console.log('   Thread ID:', result.data.threadId);
+                
+                // Log the sent email for response tracking
+                try {
+                    console.log(`📧 Logging sent email: userId=${userId}, contactId=${contactId}, messageId=${result.data.id}, threadId=${result.data.threadId}`);
+                    await logSentEmail(userId, contactId, null, result.data.id, result.data.threadId, subject, contact.email);
+                    console.log('✅ Email logged successfully');
+                } catch (logError) {
+                    console.error('❌ Error logging sent email:', logError);
+                }
                 
                 // Mark as sent
                 db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
@@ -1127,6 +1632,16 @@ async function sendEmail(userId, contactId, subject, template) {
                     
                     console.log('✅ ✅ ✅ CADENCE EMAIL SENT AFTER TOKEN REFRESH! ✅ ✅ ✅');
                     console.log('   Message ID:', retryResult.data.id);
+                    console.log('   Thread ID:', retryResult.data.threadId);
+                    
+                    // Log the sent email for response tracking
+                    try {
+                        console.log(`📧 Logging sent email (retry): userId=${userId}, contactId=${contactId}, messageId=${retryResult.data.id}, threadId=${retryResult.data.threadId}`);
+                        await logSentEmail(userId, contactId, null, retryResult.data.id, retryResult.data.threadId, subject, contact.email);
+                        console.log('✅ Email logged successfully (retry)');
+                    } catch (logError) {
+                        console.error('❌ Error logging sent email (retry):', logError);
+                    }
                     
                     // Mark as sent
                     db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE contact_id = ? AND status = 'pending'", [contactId]);
@@ -1508,6 +2023,508 @@ app.post('/api/send-test-email', authenticateToken, async (req, res) => {
 });
 
 // Health check
+// Email response tracking endpoints
+app.post('/api/check-responses', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🔍 Manual response check triggered for user ${req.user.userId}`);
+        const result = await checkForEmailResponses(req.user.userId);
+        res.json({
+            success: true,
+            responsesFound: result.responsesFound,
+            errors: result.errors,
+            message: `Found ${result.responsesFound} new responses`
+        });
+    } catch (error) {
+        console.error('Error checking responses:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to check for responses',
+            details: error.message 
+        });
+    }
+});
+
+// Google Calendar integration
+app.get('/api/calendar/events', authenticateToken, async (req, res) => {
+    try {
+        // Get user's Google OAuth tokens
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!user || !user.access_token) {
+            return res.status(401).json({ error: 'User not authenticated with Google' });
+        }
+
+        const { google } = require('googleapis');
+        
+        // Create OAuth2 client
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+        // Get upcoming events
+        const response = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: new Date().toISOString(),
+            maxResults: 10,
+            singleEvents: true,
+            orderBy: 'startTime',
+        });
+
+        const events = response.data.items || [];
+        
+        res.json({
+            success: true,
+            events: events.map(event => ({
+                id: event.id,
+                summary: event.summary || 'No Title',
+                start: event.start?.dateTime || event.start?.date,
+                end: event.end?.dateTime || event.end?.date,
+                location: event.location,
+                description: event.description
+            }))
+        });
+
+    } catch (error) {
+        console.error('Error fetching calendar events:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch calendar events',
+            details: error.message 
+        });
+    }
+});
+
+// AI-powered scheduling assistant
+app.post('/api/scheduling/analyze-response', authenticateToken, async (req, res) => {
+    try {
+        const { responseText, contactEmail, contactName } = req.body;
+        
+        console.log(`🤖 Analyzing response for scheduling intent: ${contactEmail}`);
+        
+        // Use GPT to analyze scheduling intent and extract times
+        const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `You are an AI scheduling assistant. Analyze the following email response to determine if the person is asking for scheduling/meeting availability or suggesting specific times.
+
+Respond with a JSON object containing:
+- schedulingType: "none", "request_availability", "book_specific_time", or "general_scheduling"
+- suggestedTimes: array of specific times mentioned (if any) in natural language format
+- confidence: number between 0-1
+
+Examples:
+- "I'm available next week" → {"schedulingType": "request_availability", "suggestedTimes": [], "confidence": 0.9}
+- "How about Tuesday at 2pm?" → {"schedulingType": "book_specific_time", "suggestedTimes": ["Tuesday at 2pm"], "confidence": 0.95}
+- "I can do tomorrow morning or Friday afternoon" → {"schedulingType": "book_specific_time", "suggestedTimes": ["tomorrow morning", "Friday afternoon"], "confidence": 0.9}
+- "Thanks for the email" → {"schedulingType": "none", "suggestedTimes": [], "confidence": 0.8}`
+                    },
+                    {
+                        role: 'user',
+                        content: `Analyze this email response: "${responseText}"`
+                    }
+                ],
+                temperature: 0.1
+            })
+        });
+        
+        if (!gptResponse.ok) {
+            console.log('❌ Failed to call GPT for scheduling analysis');
+            return res.json({ schedulingType: 'none', suggestedTimes: [], confidence: 0 });
+        }
+        
+        const gptData = await gptResponse.json();
+        const analysis = JSON.parse(gptData.choices[0].message.content);
+        
+        console.log(`📅 GPT scheduling analysis: ${analysis.schedulingType} (confidence: ${analysis.confidence})`);
+        
+        res.json({
+            success: true,
+            schedulingType: analysis.schedulingType,
+            suggestedTimes: analysis.suggestedTimes,
+            confidence: analysis.confidence
+        });
+        
+    } catch (error) {
+        console.error('Error analyzing scheduling response:', error);
+        res.status(500).json({ 
+            error: 'Failed to analyze scheduling response',
+            details: error.message 
+        });
+    }
+});
+
+// Get availability for scheduling
+app.get('/api/scheduling/availability', authenticateToken, async (req, res) => {
+    try {
+        const { days = 14 } = req.query;
+        
+        // Get user's Google OAuth tokens
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!user || !user.access_token) {
+            return res.status(401).json({ error: 'User not authenticated with Google' });
+        }
+
+        const { google } = require('googleapis');
+        
+        // Create OAuth2 client
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+        // Get events for the next N days
+        const timeMin = new Date();
+        const timeMax = new Date();
+        timeMax.setDate(timeMax.getDate() + parseInt(days));
+
+        const response = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: timeMin.toISOString(),
+            timeMax: timeMax.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+        });
+
+        const events = response.data.items || [];
+        
+        // Generate available 30-minute slots
+        const availableSlots = generateAvailableSlots(events, parseInt(days));
+        
+        res.json({
+            success: true,
+            availableSlots,
+            totalSlots: availableSlots.length,
+            daysChecked: parseInt(days)
+        });
+
+    } catch (error) {
+        console.error('Error fetching availability:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch availability',
+            details: error.message 
+        });
+    }
+});
+
+// Create calendar invite
+app.post('/api/scheduling/create-meeting', authenticateToken, async (req, res) => {
+    try {
+        const { contactEmail, contactName, startTime, duration = 30, subject = 'Meeting' } = req.body;
+        
+        console.log(`📅 Creating meeting with ${contactName} (${contactEmail}) at ${startTime}`);
+        
+        // Get user's Google OAuth tokens
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!user || !user.access_token) {
+            return res.status(401).json({ error: 'User not authenticated with Google' });
+        }
+
+        const { google } = require('googleapis');
+        
+        // Create OAuth2 client
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+        // Create the event
+        const startDateTime = new Date(startTime);
+        const endDateTime = new Date(startDateTime.getTime() + duration * 60000);
+
+        const event = {
+            summary: subject,
+            description: `Meeting with ${contactName}`,
+            start: {
+                dateTime: startDateTime.toISOString(),
+                timeZone: 'America/New_York',
+            },
+            end: {
+                dateTime: endDateTime.toISOString(),
+                timeZone: 'America/New_York',
+            },
+            attendees: [
+                { email: contactEmail, displayName: contactName },
+                { email: user.email, displayName: user.name || 'You' }
+            ],
+            reminders: {
+                useDefault: false,
+                overrides: [
+                    { method: 'email', minutes: 24 * 60 },
+                    { method: 'popup', minutes: 10 },
+                ],
+            },
+        };
+
+        const response = await calendar.events.insert({
+            calendarId: 'primary',
+            resource: event,
+            sendUpdates: 'all'
+        });
+
+        console.log(`✅ Meeting created: ${response.data.id}`);
+        
+        res.json({
+            success: true,
+            eventId: response.data.id,
+            meetingLink: response.data.htmlLink,
+            startTime: startDateTime.toISOString(),
+            endTime: endDateTime.toISOString(),
+            attendees: [contactEmail, user.email]
+        });
+
+    } catch (error) {
+        console.error('Error creating meeting:', error);
+        res.status(500).json({ 
+            error: 'Failed to create meeting',
+            details: error.message 
+        });
+    }
+});
+
+app.get('/api/responses', authenticateToken, (req, res) => {
+    const { limit = 50, offset = 0, unread_only = false } = req.query;
+    
+    let query = `
+        SELECT er.*, c.name as contact_name, c.email as contact_email, c.company as contact_company,
+               cad.name as cadence_name
+        FROM email_responses er
+        JOIN contacts c ON er.contact_id = c.id
+        LEFT JOIN cadences cad ON er.cadence_id = cad.id
+        WHERE er.user_id = ?
+    `;
+    
+    const params = [req.user.userId];
+    
+    if (unread_only === 'true') {
+        query += ' AND er.is_read = 0';
+    }
+    
+    query += ' ORDER BY er.response_date DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    db.all(query, params, (err, responses) => {
+        if (err) {
+            console.error('Error fetching responses:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json(responses);
+        }
+    });
+});
+
+app.get('/api/responses/stats', authenticateToken, (req, res) => {
+    const queries = [
+        // Total responses
+        `SELECT COUNT(*) as total FROM email_responses WHERE user_id = ?`,
+        // Unread responses
+        `SELECT COUNT(*) as unread FROM email_responses WHERE user_id = ? AND is_read = 0`,
+        // Responses this week
+        `SELECT COUNT(*) as this_week FROM email_responses WHERE user_id = ? AND response_date > datetime('now', '-7 days')`,
+        // Response rate
+        `SELECT 
+            (SELECT COUNT(*) FROM email_responses WHERE user_id = ?) as responses,
+            (SELECT COUNT(*) FROM email_logs WHERE user_id = ?) as emails_sent`
+    ];
+    
+    const userId = req.user.userId;
+    
+    Promise.all([
+        new Promise((resolve, reject) => {
+            db.get(queries[0], [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row.total);
+            });
+        }),
+        new Promise((resolve, reject) => {
+            db.get(queries[1], [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row.unread);
+            });
+        }),
+        new Promise((resolve, reject) => {
+            db.get(queries[2], [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row.this_week);
+            });
+        }),
+        new Promise((resolve, reject) => {
+            db.get(queries[3], [userId, userId], (err, row) => {
+                if (err) reject(err);
+                else {
+                    const responseRate = row.emails_sent > 0 ? (row.responses / row.emails_sent * 100).toFixed(1) : 0;
+                    resolve(responseRate);
+                }
+            });
+        })
+    ]).then(([total, unread, thisWeek, responseRate]) => {
+        res.json({
+            total,
+            unread,
+            thisWeek,
+            responseRate: parseFloat(responseRate)
+        });
+    }).catch(err => {
+        console.error('Error fetching response stats:', err);
+        res.status(500).json({ error: 'Database error' });
+    });
+});
+
+app.put('/api/responses/:id/read', authenticateToken, (req, res) => {
+    const responseId = req.params.id;
+    
+    db.run(
+        'UPDATE email_responses SET is_read = 1 WHERE id = ? AND user_id = ?',
+        [responseId, req.user.userId],
+        function(err) {
+            if (err) {
+                console.error('Error marking response as read:', err);
+                res.status(500).json({ error: 'Database error' });
+            } else if (this.changes === 0) {
+                res.status(404).json({ error: 'Response not found' });
+            } else {
+                res.json({ success: true, message: 'Response marked as read' });
+            }
+        }
+    );
+});
+
+// Test endpoint for response tracking system
+app.post('/api/test-response-tracking', authenticateToken, async (req, res) => {
+    try {
+        console.log('🧪 Testing response tracking system...');
+        
+        // 1. Create a test contact
+        const testContact = await new Promise((resolve, reject) => {
+            db.run(`
+                INSERT INTO contacts (user_id, email, name, company, first_name, last_name)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `, [req.user.userId, 'test@example.com', 'Test User', 'Test Company', 'Test', 'User'], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID });
+            });
+        });
+        
+        // 2. Create a test cadence
+        const testCadence = await new Promise((resolve, reject) => {
+            db.run(`
+                INSERT INTO cadences (user_id, name, nodes, connections, is_active)
+                VALUES (?, ?, ?, ?, ?)
+            `, [req.user.userId, 'Test Cadence', '[]', '[]', 1], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID });
+            });
+        });
+        
+        // 3. Log a sent email
+        const sentEmail = await logSentEmail(
+            req.user.userId,
+            testContact.id,
+            testCadence.id,
+            'test-message-123',
+            'test-thread-456',
+            'Test Subject',
+            'test@example.com'
+        );
+        
+        // 4. Simulate a response
+        const testResponse = await logEmailResponse(
+            req.user.userId,
+            testContact.id,
+            testCadence.id,
+            'test-message-123',
+            'response-message-789',
+            'Re: Test Subject',
+            'Thanks for reaching out! I am interested in learning more.',
+            'Test User <test@example.com>',
+            new Date()
+        );
+        
+        // 5. Test the stats endpoint
+        const statsResponse = await fetch(`http://localhost:3000/api/responses/stats`, {
+            headers: { 'Authorization': `Bearer ${req.headers.authorization.split(' ')[1]}` }
+        });
+        const stats = await statsResponse.json();
+        
+        // 6. Test the responses endpoint
+        const responsesResponse = await fetch(`http://localhost:3000/api/responses`, {
+            headers: { 'Authorization': `Bearer ${req.headers.authorization.split(' ')[1]}` }
+        });
+        const responses = await responsesResponse.json();
+        
+        console.log('✅ Response tracking test completed successfully!');
+        
+        res.json({
+            success: true,
+            message: 'Response tracking system test completed',
+            testData: {
+                contactId: testContact.id,
+                cadenceId: testCadence.id,
+                sentEmailId: sentEmail,
+                responseId: testResponse,
+                stats: stats,
+                responseCount: responses.length
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Response tracking test failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Test failed',
+            details: error.message
+        });
+    }
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'OK', 
@@ -1521,8 +2538,605 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Test endpoint for time parsing
+app.post('/api/test/parse-time', async (req, res) => {
+    try {
+        const { timeStr } = req.body;
+        console.log(`🧪 Testing time parsing for: "${timeStr}"`);
+        
+        const parsedTime = await parseSuggestedTime(timeStr);
+        console.log(`🧪 Parsed result:`, parsedTime);
+        
+        res.json({ success: true, parsedTime });
+    } catch (error) {
+        console.error('❌ Error in test time parsing:', error);
+        res.json({ success: false, error: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/api/health`);
+    
+    // Start background response checking
+    startResponsePolling();
 });
+
+// Helper function to extract suggested times from text
+function extractSuggestedTimes(text) {
+    const timePatterns = [
+        /(\d{1,2}):?(\d{2})?\s*(am|pm)/gi,
+        /(\d{1,2})\s*(am|pm)/gi,
+        /(morning|afternoon|evening)/gi
+    ];
+    
+    const times = [];
+    const textLower = text.toLowerCase();
+    
+    // Extract specific times
+    timePatterns.forEach(pattern => {
+        const matches = text.match(pattern);
+        if (matches) {
+            times.push(...matches);
+        }
+    });
+    
+    // Extract day mentions
+    const dayPatterns = [
+        /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/gi,
+        /(tomorrow|today)/gi
+    ];
+    
+    dayPatterns.forEach(pattern => {
+        const matches = text.match(pattern);
+        if (matches) {
+            times.push(...matches);
+        }
+    });
+    
+    return [...new Set(times)]; // Remove duplicates
+}
+
+// Helper function to generate available 30-minute slots
+function generateAvailableSlots(events, days) {
+    const slots = [];
+    const now = new Date();
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + days);
+    
+    // Business hours: 9 AM to 6 PM
+    const startHour = 9;
+    const endHour = 18;
+    
+    // Convert events to time ranges for easier checking
+    const busyTimes = events.map(event => {
+        const start = new Date(event.start?.dateTime || event.start?.date);
+        const end = new Date(event.end?.dateTime || event.end?.date);
+        return { start, end };
+    });
+    
+    // Generate slots for each day
+    for (let day = 0; day < days; day++) {
+        const currentDate = new Date(now);
+        currentDate.setDate(currentDate.getDate() + day);
+        
+        // Skip weekends for now (you can modify this)
+        if (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+            continue;
+        }
+        
+        // Generate 30-minute slots for business hours
+        for (let hour = startHour; hour < endHour; hour++) {
+            for (let minute = 0; minute < 60; minute += 30) {
+                const slotStart = new Date(currentDate);
+                slotStart.setHours(hour, minute, 0, 0);
+                
+                const slotEnd = new Date(slotStart);
+                slotEnd.setMinutes(slotEnd.getMinutes() + 30);
+                
+                // Skip if slot is in the past
+                if (slotStart <= now) continue;
+                
+                // Check if slot conflicts with existing events
+                const hasConflict = busyTimes.some(busy => 
+                    (slotStart < busy.end && slotEnd > busy.start)
+                );
+                
+                if (!hasConflict) {
+                    slots.push({
+                        start: slotStart.toISOString(),
+                        end: slotEnd.toISOString(),
+                        display: slotStart.toLocaleString('en-US', {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true
+                        }),
+                        date: slotStart.toDateString(),
+                        time: slotStart.toLocaleTimeString('en-US', {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true
+                        })
+                    });
+                }
+            }
+        }
+    }
+    
+    return slots.slice(0, 20); // Return first 20 available slots
+}
+
+// Main scheduling response handler
+async function handleSchedulingResponse(userId, fromEmail, responseText, contactId, threadId, originalMessageId) {
+    console.log(`🤖 Analyzing scheduling response from ${fromEmail} in thread ${threadId}`);
+    
+    try {
+        // Get contact details
+        const contact = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM contacts WHERE id = ?", [contactId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!contact) {
+            console.log('❌ Contact not found for scheduling response');
+            return;
+        }
+        
+        // Analyze the response for scheduling intent
+        const analysisResponse = await fetch(`http://localhost:3000/api/scheduling/analyze-response`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${generateTestToken(userId)}`
+            },
+            body: JSON.stringify({
+                responseText,
+                contactEmail: fromEmail,
+                contactName: contact.name || contact.first_name || 'Contact'
+            })
+        });
+        
+        if (!analysisResponse.ok) {
+            console.log('❌ Failed to analyze scheduling response');
+            return;
+        }
+        
+        const analysis = await analysisResponse.json();
+        console.log(`📅 Scheduling analysis result: ${analysis.schedulingType}`);
+        
+        if (analysis.schedulingType === 'none') {
+            console.log('⏭️ No scheduling intent detected, skipping');
+            return;
+        }
+        
+        // Handle different scheduling types (pass threading info)
+        if (analysis.schedulingType === 'request_availability') {
+            await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+        } else if (analysis.schedulingType === 'book_specific_time') {
+            await handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+        } else if (analysis.schedulingType === 'general_scheduling') {
+            await handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error in handleSchedulingResponse:', error);
+    }
+}
+
+// Handle when someone asks for your availability
+async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+    console.log(`📅 Handling availability request from ${contact.name} in thread ${threadId}`);
+    
+    try {
+        // Get your availability
+        const availabilityResponse = await fetch(`http://localhost:3000/api/scheduling/availability?days=14`, {
+            headers: {
+                'Authorization': `Bearer ${generateTestToken(userId)}`
+            }
+        });
+        
+        if (!availabilityResponse.ok) {
+            console.log('❌ Failed to get availability');
+            return;
+        }
+        
+        const availability = await availabilityResponse.json();
+        
+        if (availability.availableSlots.length === 0) {
+            console.log('❌ No available slots found');
+            return;
+        }
+        
+        // Generate availability response email
+        const availabilityText = generateAvailabilityEmail(availability.availableSlots, contact.name);
+        
+        // Send the availability response in thread
+        await sendSchedulingResponse(userId, fromEmail, `Re: Your availability request`, availabilityText, threadId, originalMessageId);
+        
+        console.log(`✅ Availability response sent to ${contact.name} in thread ${threadId}`);
+        
+    } catch (error) {
+        console.error('❌ Error handling availability request:', error);
+    }
+}
+
+// Handle when someone suggests a specific time
+async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+    console.log(`📅 Handling specific time booking from ${contact.name} in thread ${threadId}`);
+    
+    try {
+        // Parse suggested times from the analysis
+        const suggestedTimes = analysis.suggestedTimes || [];
+        console.log(`📅 Suggested times: ${suggestedTimes.join(', ')}`);
+        
+        // Try to create a calendar invite for the suggested time
+        let calendarEvent = null;
+        let meetingTime = null;
+        
+                if (suggestedTimes.length > 0) {
+                    // Parse the first suggested time and create a meeting
+                    const timeStr = suggestedTimes[0];
+                    meetingTime = await parseSuggestedTime(timeStr);
+                    
+                    if (meetingTime) {
+                console.log(`📅 Creating calendar invite for: ${meetingTime.start} - ${meetingTime.end}`);
+                
+                // Create calendar event
+                const createMeetingResponse = await fetch(`http://localhost:3000/api/scheduling/create-meeting`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${generateTestToken(userId)}`
+                    },
+                    body: JSON.stringify({
+                        contactEmail: fromEmail,
+                        contactName: contact.name,
+                        startTime: meetingTime.start,
+                        endTime: meetingTime.end,
+                        subject: `Meeting with ${contact.name}`
+                    })
+                });
+                
+                if (createMeetingResponse.ok) {
+                    calendarEvent = await createMeetingResponse.json();
+                    console.log(`✅ Calendar invite created: ${calendarEvent.eventId}`);
+                } else {
+                    console.log('❌ Failed to create calendar invite');
+                }
+            }
+        }
+        
+        // Send confirmation with calendar invite details
+        let confirmationText;
+        if (calendarEvent && meetingTime) {
+            confirmationText = `Hi ${contact.name},\n\nPerfect! I've scheduled our meeting for ${meetingTime.display}.\n\nI've sent you a calendar invite with all the details. Looking forward to speaking with you!\n\nBest regards`;
+        } else {
+            confirmationText = `Hi ${contact.name},\n\nThat time works for me! Let me check my calendar and send you a few specific options.\n\nBest regards`;
+        }
+        
+        await sendSchedulingResponse(userId, fromEmail, `Re: Meeting confirmation`, confirmationText, threadId, originalMessageId);
+        
+        console.log(`✅ Time confirmation sent to ${contact.name} in thread ${threadId}`);
+        
+    } catch (error) {
+        console.error('❌ Error handling specific time booking:', error);
+    }
+}
+
+// Handle general scheduling requests
+async function handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId) {
+    console.log(`📅 Handling general scheduling request from ${contact.name} in thread ${threadId}`);
+    
+    try {
+        // Get availability and send it
+        await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, originalMessageId);
+        
+    } catch (error) {
+        console.error('❌ Error handling general scheduling request:', error);
+    }
+}
+
+// Generate availability email text
+function generateAvailabilityEmail(availableSlots, contactName) {
+    const slots = availableSlots.slice(0, 8); // Show first 8 slots
+    
+    let emailText = `Hi ${contactName},\n\nThanks for your interest in scheduling a meeting! Here are my available times for the next 2 weeks:\n\n`;
+    
+    slots.forEach((slot, index) => {
+        emailText += `${index + 1}. ${slot.display}\n`;
+    });
+    
+    emailText += `\nPlease let me know which time works best for you, and I'll send you a calendar invite!\n\nBest regards`;
+    
+    return emailText;
+}
+
+// Send scheduling response email
+async function sendSchedulingResponse(userId, toEmail, subject, body, originalThreadId, originalMessageId) {
+    try {
+        console.log(`📧 Sending scheduling response to ${toEmail} in thread ${originalThreadId}`);
+        
+        // Get user details
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!user || !user.access_token) {
+            console.log('❌ User not authenticated for sending scheduling response');
+            return;
+        }
+        
+        // Send the email using Gmail API
+        const { google } = require('googleapis');
+        
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+        
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+        
+        // Create email message with threading headers (same as cadence emails)
+        const message = [
+            `To: ${toEmail}`,
+            `Subject: ${subject}`,
+            `In-Reply-To: ${originalMessageId}`,
+            `References: ${originalMessageId}`,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            body
+        ].join('\r\n'); // Use \r\n for proper MIME format
+        
+        const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        
+        const result = await gmail.users.messages.send({
+            userId: 'me',
+            requestBody: {
+                raw: encodedMessage,
+                threadId: originalThreadId
+            }
+        });
+        
+        console.log(`✅ Scheduling response email sent in thread: ${result.data.id}`);
+        
+    } catch (error) {
+        console.error('❌ Error sending scheduling response:', error);
+    }
+}
+
+// Parse suggested time string into calendar format using GPT
+async function parseSuggestedTime(timeStr) {
+    console.log(`🕐 Parsing suggested time with GPT: "${timeStr}"`);
+
+    // For "tomorrow" cases, use fallback function to avoid GPT confusion
+    if (timeStr.toLowerCase().includes('tomorrow')) {
+        console.log(`🕐 Using fallback for "tomorrow" case to avoid GPT confusion`);
+        return parseSuggestedTimeFallback(timeStr);
+    }
+
+    try {
+        const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `You are a time parsing assistant. Convert natural language time expressions into specific calendar times.
+
+IMPORTANT: "tomorrow" means the very next day from today. If today is Monday, "tomorrow" is Tuesday, NOT Wednesday.
+
+Given a time expression, return a JSON object with:
+- start: ISO string for the start time (30-minute meeting)
+- end: ISO string for the end time (30 minutes later)
+- display: human-readable format like "Tuesday, Jan 15, 2:00 PM"
+
+                                 Rules:
+                                 - If no specific time is mentioned, suggest 2:00 PM
+                                 - If no day is mentioned, use the next business day
+                                 - Always create 30-minute meetings
+                                 - Use current date as reference: ${new Date().toISOString().split('T')[0]} (${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })})
+                                 - "tomorrow" means the NEXT day from today (not day after tomorrow)
+                                 - "day after tomorrow" means the day after tomorrow
+                                 - Be very careful with relative dates - tomorrow is +1 day, not +2 days
+                                 
+                                 Examples (assuming today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}):
+                                 - "Tuesday at 2pm" → specific Tuesday at 2:00 PM
+                                 - "tomorrow morning" → tomorrow at 10:00 AM (next day)
+                                 - "tomorrow 6pm" → tomorrow at 6:00 PM (next day)
+                                 - "tomorrow 6:00 pm EDT" → tomorrow at 6:00 PM EDT (next day)
+                                 - "day after tomorrow" → day after tomorrow at 2:00 PM
+                                 - "next week" → next Monday at 2:00 PM
+                                 - "Friday afternoon" → next Friday at 2:00 PM
+                                 
+                                 CRITICAL: "tomorrow" = next day, "day after tomorrow" = day after next day
+                                 
+                                 If today is Monday, "tomorrow" is Tuesday, NOT Wednesday!
+                                 
+                                 CALCULATION EXAMPLE:
+                                 - Today: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                 - Tomorrow: ${new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                 - Day after tomorrow: ${new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`
+                    },
+                    {
+                        role: 'user',
+                        content: `Parse this time: "${timeStr}"`
+                    }
+                ],
+                temperature: 0.1
+            })
+        });
+        
+        if (!gptResponse.ok) {
+            console.log('❌ Failed to call GPT for time parsing, using fallback');
+            return parseSuggestedTimeFallback(timeStr);
+        }
+        
+                const gptData = await gptResponse.json();
+                const parsedTime = JSON.parse(gptData.choices[0].message.content);
+
+                console.log(`📅 GPT parsed time: ${parsedTime.display}`);
+                console.log(`📅 GPT start time: ${parsedTime.start}`);
+                console.log(`📅 GPT end time: ${parsedTime.end}`);
+                return parsedTime;
+        
+    } catch (error) {
+        console.error('❌ Error parsing time with GPT:', error);
+        return parseSuggestedTimeFallback(timeStr);
+    }
+}
+
+// Fallback time parsing function
+function parseSuggestedTimeFallback(timeStr) {
+    console.log(`🕐 Using fallback time parsing: "${timeStr}"`);
+    
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Handle different time formats
+    let targetDate = new Date(today);
+    let hour = 14; // Default to 2 PM
+    let minute = 0;
+    
+    // Parse day of week
+    const dayMap = {
+        'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5
+    };
+    
+    const lowerTimeStr = timeStr.toLowerCase();
+    
+    // Check for specific days
+    for (const [day, dayNum] of Object.entries(dayMap)) {
+        if (lowerTimeStr.includes(day)) {
+            const daysUntilTarget = (dayNum - today.getDay() + 7) % 7;
+            if (daysUntilTarget === 0) daysUntilTarget = 7; // Next week if today
+            targetDate.setDate(today.getDate() + daysUntilTarget);
+            break;
+        }
+    }
+    
+    // Check for "tomorrow"
+    if (lowerTimeStr.includes('tomorrow')) {
+        targetDate.setDate(today.getDate() + 1);
+    }
+    
+    // Check for "next week"
+    if (lowerTimeStr.includes('next week')) {
+        targetDate.setDate(today.getDate() + 7);
+    }
+    
+    // Parse time
+    if (lowerTimeStr.includes('2pm') || lowerTimeStr.includes('2 pm')) {
+        hour = 14;
+    } else if (lowerTimeStr.includes('6pm') || lowerTimeStr.includes('6 pm') || lowerTimeStr.includes('6:00 pm')) {
+        hour = 18;
+    } else if (lowerTimeStr.includes('morning')) {
+        hour = 10;
+    } else if (lowerTimeStr.includes('afternoon')) {
+        hour = 14;
+    } else if (lowerTimeStr.includes('evening')) {
+        hour = 18;
+    }
+    
+    // Set the meeting time
+    targetDate.setHours(hour, minute, 0, 0);
+    
+    // Create 30-minute meeting
+    const endTime = new Date(targetDate.getTime() + 30 * 60 * 1000);
+    
+    const result = {
+        start: targetDate.toISOString(),
+        end: endTime.toISOString(),
+        display: targetDate.toLocaleString('en-US', { 
+            weekday: 'long', 
+            month: 'short', 
+            day: 'numeric', 
+            hour: 'numeric', 
+            minute: '2-digit',
+            hour12: true 
+        })
+    };
+    
+    console.log(`📅 Fallback parsed time: ${result.display}`);
+    return result;
+}
+
+// Generate test token for internal API calls
+function generateTestToken(userId) {
+    const jwt = require('jsonwebtoken');
+    return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '1h' });
+}
+
+// Background response polling
+function startResponsePolling() {
+    console.log('🔄 Starting background response polling (every 30 seconds)...');
+    
+    // Check immediately on startup
+    setTimeout(() => {
+        checkAllUsersForResponses();
+    }, 5000); // Wait 5 seconds for server to fully start
+    
+    // Then check every 30 seconds
+    setInterval(() => {
+        checkAllUsersForResponses();
+    }, 30000); // 30 seconds
+}
+
+// Check all users for responses
+async function checkAllUsersForResponses() {
+    try {
+        console.log('🔍 Background check: Looking for email responses...');
+        
+        // Get all users with Google OAuth tokens
+        const users = await new Promise((resolve, reject) => {
+            db.all(`SELECT id, email FROM users WHERE access_token IS NOT NULL`, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            });
+        });
+        
+        console.log(`👥 Found ${users.length} users to check for responses`);
+        
+        let totalResponsesFound = 0;
+        for (const user of users) {
+            try {
+                const result = await checkForEmailResponses(user.id);
+                totalResponsesFound += result.responsesFound;
+                
+                if (result.responsesFound > 0) {
+                    console.log(`📬 User ${user.email}: Found ${result.responsesFound} new responses`);
+                }
+            } catch (error) {
+                console.error(`❌ Error checking responses for user ${user.email}:`, error.message);
+            }
+        }
+        
+        if (totalResponsesFound > 0) {
+            console.log(`🎉 Background check complete: Found ${totalResponsesFound} total new responses`);
+        } else {
+            console.log('✅ Background check complete: No new responses found');
+        }
+        
+    } catch (error) {
+        console.error('❌ Error in background response checking:', error);
+    }
+}
 
