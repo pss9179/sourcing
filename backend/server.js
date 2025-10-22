@@ -18,6 +18,10 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Global storage for scheduled email timers (so we can cancel them)
+// Format: { cadenceId: { queueId: timerId } }
+const scheduledEmailTimers = {};
+
 // Middleware
 app.use(cors({
     origin: function (origin, callback) {
@@ -191,25 +195,56 @@ function logEmailResponse(userId, contactId, cadenceId, originalMessageId, respo
 // Helper function to cancel pending emails in a cadence when a reply is received
 function cancelPendingEmails(userId, contactId, cadenceId) {
     return new Promise((resolve, reject) => {
-        db.run(`
-            UPDATE email_queue
-            SET status = 'cancelled'
+        // First, get the queue IDs that need to be cancelled
+        db.all(`
+            SELECT id
+            FROM email_queue
             WHERE user_id = ?
             AND contact_id = ?
             AND cadence_id = ?
             AND status = 'pending'
             AND sent_at IS NULL
-        `, [userId, contactId, cadenceId], function(err) {
+        `, [userId, contactId, cadenceId], (err, rows) => {
             if (err) {
-                console.error('Error cancelling pending emails:', err);
+                console.error('Error fetching pending emails:', err);
                 reject(err);
-            } else {
-                const cancelledCount = this.changes;
-                if (cancelledCount > 0) {
-                    console.log(`🚫 Cancelled ${cancelledCount} pending email(s) for contact ${contactId} in cadence ${cadenceId}`);
-                }
-                resolve(cancelledCount);
+                return;
             }
+
+            // Clear the setTimeout timers for these emails
+            if (rows && rows.length > 0 && scheduledEmailTimers[cadenceId]) {
+                rows.forEach(row => {
+                    const queueId = row.id;
+                    const timerId = scheduledEmailTimers[cadenceId][queueId];
+                    if (timerId) {
+                        clearTimeout(timerId);
+                        delete scheduledEmailTimers[cadenceId][queueId];
+                        console.log(`   ⏹️  Cleared timer for queue ${queueId}`);
+                    }
+                });
+            }
+
+            // Now update the database to mark them as cancelled
+            db.run(`
+                UPDATE email_queue
+                SET status = 'cancelled'
+                WHERE user_id = ?
+                AND contact_id = ?
+                AND cadence_id = ?
+                AND status = 'pending'
+                AND sent_at IS NULL
+            `, [userId, contactId, cadenceId], function(err) {
+                if (err) {
+                    console.error('Error cancelling pending emails:', err);
+                    reject(err);
+                } else {
+                    const cancelledCount = this.changes;
+                    if (cancelledCount > 0) {
+                        console.log(`🚫 Cancelled ${cancelledCount} pending email(s) for contact ${contactId} in cadence ${cadenceId}`);
+                    }
+                    resolve(cancelledCount);
+                }
+            });
         });
     });
 }
@@ -350,7 +385,7 @@ async function checkForEmailResponses(userId) {
             db.all(`
                 SELECT el.*, c.email as contact_email, c.name as contact_name
                 FROM email_logs el
-                JOIN contacts c ON el.contact_id = c.id
+                LEFT JOIN contacts c ON el.contact_id = c.id
                 WHERE el.user_id = ? AND el.sent_at > datetime('now', '-30 days')
                 ORDER BY el.sent_at DESC
             `, [userId], (err, rows) => {
@@ -422,11 +457,18 @@ async function checkForEmailResponses(userId) {
                         // Get your original Message-ID (for References chain)
                         const yourOriginalMessageId = inReplyToHeader ? inReplyToHeader.value : sentEmail.message_id;
                         
-                        // Check if this is a reply from someone other than the sender
-                        if (from.toLowerCase().includes(user.email.toLowerCase())) {
-                            console.log(`⏭️  Skipping message from self: ${from}`);
-                            continue;
-                        }
+                        // Check if this is a reply from the SAME email address that sent it
+                        // Extract email from "Name <email@domain.com>" format
+                        const fromEmailMatch = from.match(/<(.+?)>/) || from.match(/([^\s]+@[^\s]+)/);
+                        const fromEmail = fromEmailMatch ? fromEmailMatch[1] || fromEmailMatch[0] : from;
+
+                        // TESTING MODE: Disable "from self" check to allow testing with same account
+                        // In production, you would uncomment this check
+                        // if (fromEmail.toLowerCase().trim() === user.email.toLowerCase().trim()) {
+                        //     console.log(`⏭️  Skipping message from self: ${from}`);
+                        //     continue;
+                        // }
+                        console.log(`✅ Processing reply from: ${from} (Testing mode - accepting all replies)`);
                         
                         // Check if this is a legitimate reply (not auto-reply or bounce)
                         if (!isLegitimateReply(subject, from)) {
@@ -1072,7 +1114,7 @@ app.post('/api/cadences/execute', authenticateToken, (req, res) => {
     console.log(`   User ID: ${req.user.userId}`);
     console.log(`   Nodes: ${nodes.length}`);
     console.log(`   Connections: ${connections.length}`);
-    console.log(`   Contacts: ${contactIds.length}`);
+    console.log(`   Contacts: ${contactIds ? contactIds.length : 0}`);
 
     // Validate workflow
     const startNode = nodes.find(node => node.type === 'start');
@@ -1102,25 +1144,63 @@ app.post('/api/cadences/execute', authenticateToken, (req, res) => {
             const cadenceId = this.lastID;
             let totalEmailsScheduled = 0;
 
-            // Schedule emails for each contact
-            contactIds.forEach(contactId => {
-                console.log(`\n📋 Scheduling cadence for contact ${contactId}...`);
-                const emailCount = scheduleCadenceForContact(cadenceId, contactId, nodes, connections, startNode, req.user.userId);
-                totalEmailsScheduled += emailCount;
-            });
+            // If no contacts provided, execute workflow directly (for testing)
+            if (!contactIds || contactIds.length === 0) {
+                console.log('\n📧 No contacts provided - executing workflow directly');
+                processWorkflowExecution(nodes, connections, startNode, req.user.userId, null, cadenceId)
+                    .then(results => {
+                        console.log(`\n✅ Workflow execution complete: ${results.emailsSent} emails sent`);
+                        res.json({
+                            message: 'Workflow executed successfully',
+                            emailsSent: results.emailsSent,
+                            cadenceId: cadenceId
+                        });
+                    })
+                    .catch(error => {
+                        console.error('Error executing workflow:', error);
+                        res.status(500).json({ error: 'Failed to execute workflow' });
+                    });
+            } else {
+                // Execute workflow for each contact using linked list approach
+                Promise.all(contactIds.map(contactId => {
+                    return new Promise((resolve, reject) => {
+                        // Get contact details
+                        db.get("SELECT * FROM contacts WHERE id = ? AND user_id = ?", [contactId, req.user.userId], async (err, contact) => {
+                            if (err || !contact) {
+                                console.error(`❌ Contact ${contactId} not found:`, err);
+                                resolve({ contactId, emailsSent: 0, error: 'Contact not found' });
+                                return;
+                            }
 
-            console.log(`\n✅ Total emails scheduled: ${totalEmailsScheduled}`);
+                            console.log(`\n📋 Executing workflow for contact: ${contact.name} (${contact.email})`);
 
-            // Process immediate emails (0-day delays)
-            setTimeout(() => {
-                processEmailsImmediately();
-            }, 1000);
-
-            res.json({
-                message: 'Cadence started successfully',
-                emailsScheduled: totalEmailsScheduled,
-                cadenceId: cadenceId
-            });
+                            try {
+                                // Use linked list execution for this contact
+                                const results = await processWorkflowExecution(nodes, connections, startNode, req.user.userId, contact, cadenceId);
+                                console.log(`   ✅ ${results.emailsSent} emails sent for ${contact.name}`);
+                                totalEmailsScheduled += results.emailsSent;
+                                resolve({ contactId, emailsSent: results.emailsSent });
+                            } catch (error) {
+                                console.error(`   ❌ Error executing workflow for ${contact.name}:`, error);
+                                resolve({ contactId, emailsSent: 0, error: error.message });
+                            }
+                        });
+                    });
+                }))
+                .then(contactResults => {
+                    console.log(`\n✅ All workflows complete. Total emails sent: ${totalEmailsScheduled}`);
+                    res.json({
+                        message: 'Workflows executed successfully',
+                        emailsSent: totalEmailsScheduled,
+                        cadenceId: cadenceId,
+                        contactResults: contactResults
+                    });
+                })
+                .catch(error => {
+                    console.error('❌ Error executing workflows:', error);
+                    res.status(500).json({ error: 'Failed to execute workflows' });
+                });
+            }
         }
     );
 });
@@ -1180,10 +1260,14 @@ function replaceTemplateVariables(text, contact) {
     return result;
 }
 
-// New simplified workflow execution
+// LINKED LIST WORKFLOW EXECUTION
+// curr pointer iterates through nodes ONE AT A TIME
+// Maintains ONE thread throughout entire workflow
+// If delay: AWAIT it, then move to next node
+// If reply: set curr.next = null to break linked list
 async function processWorkflowExecution(nodes, connections, startNode, userId, contact = null, cadenceId = null) {
     const results = { emailsSent: 0, errors: [] };
-    
+
     // Get user for email sending
     const user = await new Promise((resolve, reject) => {
         db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
@@ -1191,163 +1275,107 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
             else resolve(row);
         });
     });
-    
+
     if (!user || !user.access_token) {
         throw new Error('User not authenticated with Google');
     }
-    
-    // Collect all email nodes in order
-    const emailSequence = [];
-    const visited = new Set();
-    
-    function collectEmails(currentNode) {
-        if (visited.has(currentNode.id)) return;
-        visited.add(currentNode.id);
-        
-        // If it's an email node, add to sequence
-        if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(currentNode.type)) {
-            const config = currentNode.config || {};
-            
-            // Check if we have required fields (allow missing 'to' if we have a contact)
-            const hasRequiredFields = config.subject && config.template && (config.to || (contact && contact.email));
-            
-            if (hasRequiredFields) {
-                // Calculate delay in milliseconds
+
+    // Build linked list structure
+    const nodeMap = new Map();
+    nodes.forEach(n => nodeMap.set(n.id, { ...n, next: null }));
+
+    // Link nodes based on connections (single path only)
+    connections.forEach(conn => {
+        const fromNode = nodeMap.get(conn.from);
+        const toNode = nodeMap.get(conn.to);
+        if (fromNode && toNode) {
+            fromNode.next = toNode; // Set next pointer
+        }
+    });
+
+    // Thread tracking - ONE thread for entire workflow
+    let threadId = null;
+    let firstMessageId = null;
+    let firstSubject = null;
+
+    // Start at head (Start node)
+    let curr = nodeMap.get(startNode.id);
+
+    console.log(`\n🔗 Starting linked list execution from node: ${curr.id}`);
+
+    // Iterate through linked list
+    while (curr) {
+        console.log(`\n👉 Current node: ${curr.id} (type: ${curr.type})`);
+
+        // Process email nodes
+        if (['email', 'followup-email', 'followup-email2', 'new-email'].includes(curr.type)) {
+            const config = curr.config || {};
+
+            if (config.subject && config.template) {
+                // Calculate delay
                 let delayMs = 0;
-                if (config.delayType === 'immediate' || !config.delayType) {
-                    delayMs = 0;
-                } else if (config.delayType === 'seconds') {
+                if (config.delayType === 'seconds') {
                     delayMs = (config.delayValue || 0) * 1000;
                 } else if (config.delayType === 'minutes') {
                     delayMs = (config.delayValue || 0) * 60 * 1000;
                 } else if (config.delayType === 'days') {
                     delayMs = (config.delayValue || 0) * 24 * 60 * 60 * 1000;
-                } else if (config.delayType === 'specific') {
-                    const targetDate = new Date(config.delayValue);
-                    const now = new Date();
-                    delayMs = Math.max(0, targetDate - now);
                 }
-                
-                // Apply template variable replacement if contact is provided
+
+                const processedTo = contact ? contact.email : config.to;
                 const processedSubject = contact ? replaceTemplateVariables(config.subject, contact) : config.subject;
                 const processedBody = contact ? replaceTemplateVariables(config.template, contact) : config.template;
-                const processedTo = contact ? contact.email : config.to;
-                
-                console.log(`📧 Email node configured: to=${processedTo}, subject=${processedSubject}`);
-                
-                emailSequence.push({
-                    node: currentNode,
-                    to: processedTo,
-                    subject: processedSubject,
-                    body: processedBody,
-                    delayMs: delayMs
-                });
-            } else {
-                console.log(`⚠️ Skipping email node - missing required fields:`, {
-                    hasSubject: !!config.subject,
-                    hasTemplate: !!config.template,
-                    hasTo: !!(config.to || (contact && contact.email))
-                });
-            }
-        }
-        
-        // Process connected nodes
-        const outgoing = connections.filter(conn => conn.from === currentNode.id);
-        for (const connection of outgoing) {
-            const nextNode = nodes.find(n => n.id === connection.to);
-            if (nextNode) {
-                collectEmails(nextNode);
-            }
-        }
-    }
-    
-    collectEmails(startNode);
-    console.log(`📧 Found ${emailSequence.length} emails in sequence`);
 
-    // Simple linked list traversal - just send emails in order
-    let threadId = null;
-    let firstSubject = null; // Track first email's subject for threading
-
-    for (let i = 0; i < emailSequence.length; i++) {
-        const email = emailSequence[i];
-        const isFirstEmail = (i === 0);
-
-        // Use first email's subject for all follow-ups (for proper Gmail threading)
-        const emailSubject = isFirstEmail ? email.subject : firstSubject;
-
-        console.log(`\n📧 Email ${i + 1}/${emailSequence.length}: ${emailSubject}`);
-        console.log(`   To: ${email.to}`);
-        console.log(`   Delay: ${email.delayMs}ms`);
-        console.log(`   Thread ID: ${threadId || 'New thread'}`);
-
-        if (email.delayMs === 0) {
-            // Send immediately
-            try {
-                const result = await sendDirectEmail(user, email.to, emailSubject, email.body, threadId, null);
-                if (isFirstEmail) {
-                    threadId = result.threadId; // Capture thread ID from first email
-                    firstSubject = email.subject; // Capture first subject
+                // Store first subject for threading
+                if (!firstSubject) {
+                    firstSubject = processedSubject;
                 }
-                console.log(`   ✅ Email sent${threadId ? ' in thread: ' + result.threadId : ''}`);
 
-                // Log the sent email
-                await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, emailSubject, email.to, email.node.id);
-                results.emailsSent++;
-            } catch (error) {
-                console.error(`   ❌ Failed to send email: ${error.message}`);
-                results.errors.push(error.message);
-            }
-        } else {
-            // Schedule for later
-            const scheduledDate = new Date(Date.now() + email.delayMs);
-            console.log(`   ⏰ Scheduling for ${scheduledDate.toLocaleString()}`);
+                // Use first subject for all emails (for threading)
+                const emailSubject = threadId ? firstSubject : processedSubject;
 
-            // Add to email_queue for tracking
-            await new Promise((resolve, reject) => {
-                db.run(`
-                    INSERT INTO email_queue (user_id, contact_id, cadence_id, node_id, subject, template, scheduled_for, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
-                `, [userId, contact ? contact.id : null, cadenceId, email.node.id, emailSubject, email.body, scheduledDate.toISOString()], function(err) {
-                    if (err) reject(err);
-                    else {
-                        console.log(`   📝 Added to email_queue with ID: ${this.lastID}`);
-                        resolve(this.lastID);
-                    }
-                });
-            });
+                console.log(`📧 Email: ${emailSubject}`);
+                console.log(`   To: ${processedTo}`);
+                console.log(`   Delay: ${delayMs}ms`);
+                console.log(`   Thread: ${threadId || 'NEW'}`);
 
-            // Capture thread ID and subject for closure
-            const capturedThreadId = threadId;
-            const capturedSubject = emailSubject;
+                // AWAIT delay if needed
+                if (delayMs > 0) {
+                    console.log(`   ⏰ Waiting ${delayMs}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
 
-            setTimeout(async () => {
+                // Send email
                 try {
-                    const result = await sendDirectEmail(user, email.to, capturedSubject, email.body, capturedThreadId, null);
-                    console.log(`   ✅ Scheduled email sent in thread: ${result.threadId}`);
+                    const result = await sendDirectEmail(user, processedTo, emailSubject, processedBody, threadId, firstMessageId);
 
-                    // Update email_queue status
-                    await new Promise((resolve, reject) => {
-                        db.run(`
-                            UPDATE email_queue
-                            SET status = 'sent', sent_at = CURRENT_TIMESTAMP
-                            WHERE cadence_id = ? AND node_id = ? AND user_id = ? AND status = 'pending'
-                        `, [cadenceId, email.node.id, userId], (err) => {
-                            if (err) reject(err);
-                            else resolve();
-                        });
-                    });
+                    // Capture thread from FIRST email
+                    if (!threadId) {
+                        threadId = result.threadId;
+                        firstMessageId = result.messageId;
+                        console.log(`   ✅ First email sent! Thread: ${threadId}`);
+                    } else {
+                        console.log(`   ✅ Email sent in thread: ${threadId}`);
+                    }
 
-                    // Log the sent email
-                    await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, capturedSubject, email.to, email.node.id);
+                    await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, emailSubject, processedTo, curr.id);
+                    results.emailsSent++;
+
                 } catch (error) {
-                    console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
+                    console.error(`   ❌ Failed to send: ${error.message}`);
+                    results.errors.push(error.message);
                 }
-            }, email.delayMs);
+            }
+        }
 
-            results.emailsSent++;
+        // Move to next node
+        curr = curr.next;
+        if (curr) {
+            console.log(`   ➡️  Moving to next node: ${curr.id}`);
         }
     }
-    
+
+    console.log(`\n✅ Linked list execution complete. Sent ${results.emailsSent} emails in thread ${threadId}`);
     return results;
 }
 
@@ -1382,9 +1410,9 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
         'Content-Type: text/html; charset=utf-8'
     ];
     
-    // ALWAYS add In-Reply-To and References when we have a fake Message-ID
-    // This makes ALL emails (including the first) reply to the same fake message
-    if (inReplyToMessageId) {
+    // Add In-Reply-To and References headers for threading
+    // Only add if we have a valid threadId (not the first email)
+    if (threadId && inReplyToMessageId) {
         messageParts.push(`In-Reply-To: ${inReplyToMessageId}`);
         messageParts.push(`References: ${inReplyToMessageId}`);
         console.log(`   📎 Adding threading headers: In-Reply-To: ${inReplyToMessageId}`);
@@ -1417,23 +1445,25 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
     
     // Get the actual Message-ID from the sent email's headers
     let messageId = `<${result.data.id}@mail.gmail.com>`; // fallback
-    
+
     try {
         const sentMessage = await gmail.users.messages.get({
             userId: 'me',
-            id: result.data.id
+            id: result.data.id,
+            format: 'metadata',
+            metadataHeaders: ['Message-ID']
         });
-        
+
         const headers = sentMessage.data.payload.headers;
-        const messageIdHeader = headers.find(h => h.name === 'Message-ID');
+        const messageIdHeader = headers.find(h => h.name.toLowerCase() === 'message-id');
         if (messageIdHeader) {
             messageId = messageIdHeader.value;
             console.log(`   📧 Actual Message-ID: ${messageId}`);
         } else {
-            console.log(`   📧 Using fallback Message-ID: ${messageId}`);
+            console.log(`   📧 No Message-ID header found, using fallback: ${messageId}`);
         }
     } catch (error) {
-        console.log(`   📧 Error getting Message-ID, using fallback: ${messageId}`);
+        console.log(`   📧 Error getting Message-ID: ${error.message}, using fallback: ${messageId}`);
     }
     
     // Log the sent email for response tracking
