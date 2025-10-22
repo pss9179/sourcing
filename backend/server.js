@@ -3092,12 +3092,18 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
             `To: ${toEmail}`,
             `Subject: ${utf8Subject}`,
             'MIME-Version: 1.0',
-            'Content-Type: text/html; charset=utf-8',
-            `In-Reply-To: ${responseMessageId}`,
-            `References: ${yourOriginalMessageId} ${responseMessageId}`,
-            '',
-            body
+            'Content-Type: text/html; charset=utf-8'
         ];
+        
+        // Add threading headers - reply to the incoming email (responseMessageId)
+        if (responseMessageId) {
+            messageParts.push(`In-Reply-To: ${responseMessageId}`);
+            messageParts.push(`References: ${responseMessageId}`);
+            console.log(`   📎 Adding threading headers: In-Reply-To: ${responseMessageId}`);
+        }
+        
+        messageParts.push('');
+        messageParts.push(body);
         const message = messageParts.join('\r\n'); // Use \r\n for proper MIME format
         
         const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
