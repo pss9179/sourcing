@@ -1,4 +1,4 @@
-// Content script for CadenceFlow main app (localhost:8081)
+// Content script for CadenceFlow main app (localhost:3000)
 // Listens for auth token and saves it to extension storage
 
 console.log('🔧 CadenceFlow app content script loaded');

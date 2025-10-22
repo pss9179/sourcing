@@ -12,10 +12,10 @@
   "host_permissions": [
     "https://*.linkedin.com/*",
     "http://localhost:3000/*",
-    "http://localhost:8081/*"
+    "http://localhost:3000/*"
   ],
   "externally_connectable": {
-    "matches": ["http://localhost:8081/*", "http://127.0.0.1:8081/*"]
+    "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"]
   },
   "action": {
     "default_popup": "popup.html",
@@ -32,7 +32,7 @@
       "css": ["content.css"]
     },
     {
-      "matches": ["http://localhost:8081/*", "http://127.0.0.1:8081/*"],
+      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"],
       "js": ["app-content.js"],
       "run_at": "document_end"
     }

@@ -180,7 +180,7 @@ document.addEventListener('click', async (e) => {
     }
     
     if (e.target.id === 'openCadenceFlowBtn') {
-        chrome.tabs.create({ url: 'http://localhost:8081' });
+        chrome.tabs.create({ url: 'http://localhost:3000' });
         window.close();
     }
 });
@@ -276,18 +276,18 @@ async function addToCadence() {
         try {
             const tabs = await chrome.tabs.query({});
             const appTab = tabs.find(tab => 
-                tab.url && (tab.url.includes('localhost:8081') || tab.url.includes('127.0.0.1:8081'))
+                tab.url && (tab.url.includes('localhost:3000') || tab.url.includes('127.0.0.1:3000'))
             );
             
             if (appTab) {
                 // Update existing tab with URL parameters
-                const url = `http://localhost:8081?loadCadence=${cadenceId}&contact=${contactPayload}`;
+                const url = `http://localhost:3000?loadCadence=${cadenceId}&contact=${contactPayload}`;
                 await chrome.tabs.update(appTab.id, { url: url, active: true });
                 await chrome.windows.update(appTab.windowId, { focused: true });
                 console.log('✅ Updated existing app tab with URL params');
             } else {
                 // Open the app in a new tab with URL parameters
-                const url = `http://localhost:8081?loadCadence=${cadenceId}&contact=${contactPayload}`;
+                const url = `http://localhost:3000?loadCadence=${cadenceId}&contact=${contactPayload}`;
                 await chrome.tabs.create({ url: url, active: true });
                 console.log('✅ Opened new app tab with URL params');
             }

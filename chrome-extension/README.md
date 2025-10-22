@@ -10,7 +10,7 @@
 
 ## Usage
 
-1. Make sure you're logged into CadenceFlow (http://localhost:8081)
+1. Make sure you're logged into CadenceFlow (http://localhost:3000)
 2. Navigate to any LinkedIn profile page
 3. Click the "Add to Cadence" button that appears in the bottom right
 4. Fill in the email address (if not auto-detected)
