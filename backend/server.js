@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests) or from allowed origins
-        if (!origin || origin === 'http://localhost:8081' || origin.startsWith('chrome-extension://')) {
+        if (!origin || origin === 'http://localhost:3000' || origin.startsWith('chrome-extension://')) {
             callback(null, true);
         } else {
             callback(new Error('Not allowed by CORS'));
@@ -420,7 +420,10 @@ async function checkForEmailResponses(userId) {
                         const responseMessageId = messageIdHeader ? messageIdHeader.value : `<${message.id}@mail.gmail.com>`;
                         
                         // Get your original Message-ID (for References chain)
-                        const yourOriginalMessageId = inReplyToHeader ? inReplyToHeader.value : sentEmail.message_id;
+                        // Use the sent email's Message-ID, ensuring it's in proper format
+                        const yourOriginalMessageId = sentEmail.message_id ? 
+                            (sentEmail.message_id.startsWith('<') ? sentEmail.message_id : `<${sentEmail.message_id}@mail.gmail.com>`) :
+                            `<${sentEmail.message_id}@mail.gmail.com>`;
                         
                         // Check if this is a reply from someone other than the sender
                         if (from.toLowerCase().includes(user.email.toLowerCase())) {
@@ -688,11 +691,11 @@ app.get('/auth/google', passport.authenticate('google', {
 }));
 
 app.get('/auth/google/callback', 
-    passport.authenticate('google', { failureRedirect: 'http://localhost:8081/login' }),
+    passport.authenticate('google', { failureRedirect: 'http://localhost:3000/login' }),
     (req, res) => {
         // Generate JWT token with 30 day expiration
         const token = jwt.sign({ userId: req.user.id }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '30d' });
-        res.redirect(`http://localhost:8081/?token=${token}`);
+        res.redirect(`http://localhost:3000/?token=${token}`);
     }
 );
 
@@ -786,22 +789,22 @@ app.post('/api/contacts', authenticateToken, (req, res) => {
     } else {
         db.get(`SELECT * FROM contacts WHERE user_id = ? AND email = ?`,
             [req.user.userId, email],
-            (err, existing) => {
-                if (err) {
-                    return res.status(500).json({ error: 'Database error' });
-                }
-                
-                if (existing) {
-                    // Contact already exists - return the existing contact
-                    console.log(`⚠️ Contact already exists: ${email}`);
-                    return res.json({ 
-                        id: existing.id, 
-                        message: 'Contact already exists',
-                        alreadyExists: true 
-                    });
-                }
-                
-                // Insert new contact
+        (err, existing) => {
+            if (err) {
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            if (existing) {
+                // Contact already exists - return the existing contact
+                console.log(`⚠️ Contact already exists: ${email}`);
+                return res.json({ 
+                    id: existing.id, 
+                    message: 'Contact already exists',
+                    alreadyExists: true 
+                });
+            }
+            
+            // Insert new contact
                 insertNewContact();
             });
         return;
@@ -809,18 +812,18 @@ app.post('/api/contacts', authenticateToken, (req, res) => {
     
     // Function to insert new contact
     function insertNewContact() {
-        db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
+            db.run(`INSERT INTO contacts (user_id, email, name, company, title, first_name, last_name, linkedin_url) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [req.user.userId, email, name, company, title || null, firstName || null, lastName || null, linkedinUrl || null],
         function(err) {
             if (err) {
                     console.error('Error adding contact:', err);
                 res.status(500).json({ error: 'Failed to add contact' });
             } else {
-                    console.log(`✅ New contact added: ${email}`);
-                    res.json({ id: this.lastID, message: 'Contact added successfully', alreadyExists: false });
+                        console.log(`✅ New contact added: ${email}`);
+                        res.json({ id: this.lastID, message: 'Contact added successfully', alreadyExists: false });
             }
-        });
+                });
     }
     
     // Call insertNewContact for test email or after duplicate check
@@ -886,7 +889,7 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
                     
                     if (exactMatch) {
                         console.log(`✅ Found exact email match via Hunter.io: ${exactMatch.value}`);
-                        return res.json({
+                    return res.json({
                             email: exactMatch.value,
                             source: 'hunter.io',
                             confidence: 'high',
@@ -912,16 +915,16 @@ app.post('/api/find-email', authenticateToken, async (req, res) => {
         
         // Test mode: Always suggest test email for easy testing
         console.log(`🧪 Test mode: Suggesting test email for ${firstName} ${lastName}`);
-        return res.json({
+            return res.json({
             suggestions: [
                 'pss9179@stern.nyu.edu',  // Your test email
                 'test@example.com',
                 'testuser@company.com'
             ],
             source: 'test-mode',
-            confidence: 'low',
+                confidence: 'low',
             message: 'Test mode: Use one of the suggested test emails for testing response detection.'
-        });
+            });
         
         res.json({ 
             email: null, 
@@ -1021,12 +1024,12 @@ app.post('/api/cadences/:id/add-contact', authenticateToken, async (req, res) =>
 // Run workflow directly (new simplified endpoint)
 app.post('/api/workflow/run', authenticateToken, async (req, res) => {
     const { nodes, connections } = req.body;
-
+    
     console.log('\n🚀 RUNNING WORKFLOW');
     console.log(`   User ID: ${req.user.userId}`);
     console.log(`   Nodes: ${nodes.length}`);
     console.log(`   Connections: ${connections.length}`);
-
+    
     // Validate workflow
     const startNode = nodes.find(node => node.type === 'start');
     if (!startNode) {
@@ -1045,21 +1048,21 @@ app.post('/api/workflow/run', authenticateToken, async (req, res) => {
             }
 
             const cadenceId = this.lastID;
-
-            // Process workflow from start node
-            try {
+    
+    // Process workflow from start node
+    try {
                 const results = await processWorkflowExecution(nodes, connections, startNode, req.user.userId, null, cadenceId);
-
-                res.json({
-                    success: true,
-                    message: `Workflow executed! ${results.emailsSent} email(s) sent successfully.`,
+        
+        res.json({ 
+            success: true,
+            message: `Workflow executed! ${results.emailsSent} email(s) sent successfully.`,
                     details: results,
                     cadenceId: cadenceId
-                });
-            } catch (error) {
-                console.error('❌ Workflow execution error:', error);
-                res.status(500).json({ error: error.message });
-            }
+        });
+    } catch (error) {
+        console.error('❌ Workflow execution error:', error);
+        res.status(500).json({ error: error.message });
+    }
         }
     );
 });
@@ -1067,27 +1070,27 @@ app.post('/api/workflow/run', authenticateToken, async (req, res) => {
 // Execute cadence with current workflow (no save required)
 app.post('/api/cadences/execute', authenticateToken, (req, res) => {
     const { nodes, connections, contactIds } = req.body;
-
+    
     console.log('\n🚀 EXECUTING CADENCE FROM CURRENT WORKFLOW');
     console.log(`   User ID: ${req.user.userId}`);
     console.log(`   Nodes: ${nodes.length}`);
     console.log(`   Connections: ${connections.length}`);
     console.log(`   Contacts: ${contactIds.length}`);
-
+    
     // Validate workflow
     const startNode = nodes.find(node => node.type === 'start');
     if (!startNode) {
         return res.status(400).json({ error: 'Workflow must have a Start node' });
     }
-
-    const hasEmailNode = nodes.some(node =>
-        node.type === 'email' || node.type === 'followup-email' ||
+    
+    const hasEmailNode = nodes.some(node => 
+        node.type === 'email' || node.type === 'followup-email' || 
         node.type === 'followup-email2' || node.type === 'new-email'
     );
     if (!hasEmailNode) {
         return res.status(400).json({ error: 'Workflow must have at least one Email node' });
     }
-
+    
     // Create a temporary cadence record to track this execution
     const cadenceName = `Workflow Execution - ${new Date().toLocaleString()}`;
     db.run(
@@ -1100,27 +1103,27 @@ app.post('/api/cadences/execute', authenticateToken, (req, res) => {
             }
 
             const cadenceId = this.lastID;
-            let totalEmailsScheduled = 0;
-
-            // Schedule emails for each contact
-            contactIds.forEach(contactId => {
-                console.log(`\n📋 Scheduling cadence for contact ${contactId}...`);
+    let totalEmailsScheduled = 0;
+    
+    // Schedule emails for each contact
+    contactIds.forEach(contactId => {
+        console.log(`\n📋 Scheduling cadence for contact ${contactId}...`);
                 const emailCount = scheduleCadenceForContact(cadenceId, contactId, nodes, connections, startNode, req.user.userId);
-                totalEmailsScheduled += emailCount;
-            });
-
-            console.log(`\n✅ Total emails scheduled: ${totalEmailsScheduled}`);
-
-            // Process immediate emails (0-day delays)
-            setTimeout(() => {
-                processEmailsImmediately();
-            }, 1000);
-
-            res.json({
-                message: 'Cadence started successfully',
+        totalEmailsScheduled += emailCount;
+    });
+    
+    console.log(`\n✅ Total emails scheduled: ${totalEmailsScheduled}`);
+    
+    // Process immediate emails (0-day delays)
+    setTimeout(() => {
+        processEmailsImmediately();
+    }, 1000);
+    
+    res.json({ 
+        message: 'Cadence started successfully',
                 emailsScheduled: totalEmailsScheduled,
                 cadenceId: cadenceId
-            });
+    });
         }
     );
 });
@@ -1263,15 +1266,16 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
     
     collectEmails(startNode);
     console.log(`📧 Found ${emailSequence.length} emails in sequence`);
-
+    
     // Simple linked list traversal - just send emails in order
     let threadId = null;
     let firstSubject = null; // Track first email's subject for threading
+    let firstMessageId = null; // Track first email's Message-ID for threading
 
     for (let i = 0; i < emailSequence.length; i++) {
         const email = emailSequence[i];
         const isFirstEmail = (i === 0);
-
+        
         // Use first email's subject for all follow-ups (for proper Gmail threading)
         const emailSubject = isFirstEmail ? email.subject : firstSubject;
 
@@ -1279,14 +1283,16 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
         console.log(`   To: ${email.to}`);
         console.log(`   Delay: ${email.delayMs}ms`);
         console.log(`   Thread ID: ${threadId || 'New thread'}`);
-
+        
         if (email.delayMs === 0) {
             // Send immediately
             try {
-                const result = await sendDirectEmail(user, email.to, emailSubject, email.body, threadId, null);
+                const result = await sendDirectEmail(user, email.to, emailSubject, email.body, threadId, firstMessageId);
                 if (isFirstEmail) {
                     threadId = result.threadId; // Capture thread ID from first email
                     firstSubject = email.subject; // Capture first subject
+                    firstMessageId = result.messageId; // Capture first email's Message-ID for threading
+                    console.log(`   🧵 First email Message-ID: ${firstMessageId}`);
                 }
                 console.log(`   ✅ Email sent${threadId ? ' in thread: ' + result.threadId : ''}`);
 
@@ -1316,13 +1322,14 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
                 });
             });
 
-            // Capture thread ID and subject for closure
+            // Capture thread ID, subject, and first Message-ID for closure
             const capturedThreadId = threadId;
             const capturedSubject = emailSubject;
-
+            const capturedFirstMessageId = firstMessageId;
+            
             setTimeout(async () => {
                 try {
-                    const result = await sendDirectEmail(user, email.to, capturedSubject, email.body, capturedThreadId, null);
+                    const result = await sendDirectEmail(user, email.to, capturedSubject, email.body, capturedThreadId, capturedFirstMessageId);
                     console.log(`   ✅ Scheduled email sent in thread: ${result.threadId}`);
 
                     // Update email_queue status
@@ -1343,7 +1350,7 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
                     console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
                 }
             }, email.delayMs);
-
+            
             results.emailsSent++;
         }
     }
@@ -3078,7 +3085,7 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
         
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
         
-        // Create email message with threading headers (same as cadence emails)
+        // Create email message with proper threading headers
         const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
         const messageParts = [
             `From: ${user.email}`,
@@ -3103,7 +3110,28 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
             }
         });
         
-        console.log(`✅ Scheduling response email sent in thread: ${result.data.id}`);
+        console.log(`✅ Scheduling response email sent! Message ID: ${result.data.id}, Thread ID: ${result.data.threadId}`);
+        
+        // Get the actual Message-ID from the sent email's headers (same as cadence emails)
+        let messageId = `<${result.data.id}@mail.gmail.com>`; // fallback
+        
+        try {
+            const sentMessage = await gmail.users.messages.get({
+                userId: 'me',
+                id: result.data.id
+            });
+            
+            const headers = sentMessage.data.payload.headers;
+            const messageIdHeader = headers.find(h => h.name === 'Message-ID');
+            if (messageIdHeader) {
+                messageId = messageIdHeader.value;
+                console.log(`   📧 Actual Message-ID: ${messageId}`);
+            } else {
+                console.log(`   📧 Using fallback Message-ID: ${messageId}`);
+            }
+        } catch (error) {
+            console.log(`   📧 Error getting Message-ID, using fallback: ${messageId}`);
+        }
         
     } catch (error) {
         console.error('❌ Error sending scheduling response:', error);
