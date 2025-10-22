@@ -97,6 +97,11 @@ db.serialize(() => {
     db.run(`ALTER TABLE contacts ADD COLUMN last_name TEXT`, () => {});
     db.run(`ALTER TABLE contacts ADD COLUMN linkedin_url TEXT`, () => {});
 
+    // Add new columns to email_queue for threading support
+    db.run(`ALTER TABLE email_queue ADD COLUMN recipient_email TEXT`, () => {});
+    db.run(`ALTER TABLE email_queue ADD COLUMN thread_id TEXT`, () => {});
+    db.run(`ALTER TABLE email_queue ADD COLUMN in_reply_to TEXT`, () => {});
+
     // Email queue table
     db.run(`CREATE TABLE IF NOT EXISTS email_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1339,31 +1344,60 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
                 console.log(`   Delay: ${delayMs}ms`);
                 console.log(`   Thread: ${threadId || 'NEW'}`);
 
-                // AWAIT delay if needed
-                if (delayMs > 0) {
-                    console.log(`   ⏰ Waiting ${delayMs}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delayMs));
-                }
+                // For delays >= 60s, queue them (cron runs every minute)
+                // For delays < 60s, await them synchronously (more accurate)
+                if (delayMs >= 60000) {
+                    console.log(`   📥 Queueing email with delay ${delayMs}ms (>= 1 minute)...`);
 
-                // Send email
-                try {
-                    const result = await sendDirectEmail(user, processedTo, emailSubject, processedBody, threadId, firstMessageId);
+                    const scheduledFor = new Date(Date.now() + delayMs);
+                    const sqliteDateTime = scheduledFor.toISOString().replace('T', ' ').replace('Z', '');
 
-                    // Capture thread from FIRST email
-                    if (!threadId) {
-                        threadId = result.threadId;
-                        firstMessageId = result.messageId;
-                        console.log(`   ✅ First email sent! Thread: ${threadId}`);
+                    await new Promise((resolve, reject) => {
+                        db.run(
+                            `INSERT INTO email_queue (user_id, contact_id, cadence_id, node_id, subject, template, recipient_email, scheduled_for, status, thread_id, in_reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+                            [userId, contact ? contact.id : null, cadenceId, curr.id, emailSubject, processedBody, processedTo, sqliteDateTime, threadId, firstMessageId],
+                            (err) => {
+                                if (err) {
+                                    console.error(`   ❌ Failed to queue email: ${err.message}`);
+                                    reject(err);
+                                } else {
+                                    console.log(`   ✅ Email queued for ${scheduledFor.toLocaleString()}`);
+                                    resolve();
+                                }
+                            }
+                        );
+                    });
+
+                    results.emailsSent++; // Count queued emails
+
+                } else {
+                    // Send immediately or after short delay (< 60s)
+                    if (delayMs > 0) {
+                        console.log(`   ⏰ Waiting ${delayMs}ms before sending...`);
+                        await new Promise(resolve => setTimeout(resolve, delayMs));
                     } else {
-                        console.log(`   ✅ Email sent in thread: ${threadId}`);
+                        console.log(`   🔵 Sending email immediately...`);
                     }
 
-                    await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, emailSubject, processedTo, curr.id);
-                    results.emailsSent++;
+                    try {
+                        const result = await sendDirectEmail(user, processedTo, emailSubject, processedBody, threadId, firstMessageId);
 
-                } catch (error) {
-                    console.error(`   ❌ Failed to send: ${error.message}`);
-                    results.errors.push(error.message);
+                        // Capture thread from FIRST email
+                        if (!threadId) {
+                            threadId = result.threadId;
+                            firstMessageId = result.messageId;
+                            console.log(`   ✅ First email sent! Thread: ${threadId}`);
+                        } else {
+                            console.log(`   ✅ Email sent in thread: ${threadId}`);
+                        }
+
+                        await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, emailSubject, processedTo, curr.id);
+                        results.emailsSent++;
+
+                    } catch (error) {
+                        console.error(`   ❌ Failed to send: ${error.message}`);
+                        results.errors.push(error.message);
+                    }
                 }
             }
         }
@@ -1765,24 +1799,67 @@ async function sendEmail(userId, contactId, subject, template) {
 
 // Cron job to process email queue
 // Process emails every minute
-cron.schedule('* * * * *', () => {
+cron.schedule('* * * * *', async () => {
     console.log('Processing email queue...');
-    
-    db.all("SELECT * FROM email_queue WHERE status = 'pending' AND scheduled_for <= datetime('now')", (err, emails) => {
+
+    db.all("SELECT * FROM email_queue WHERE status = 'pending' AND scheduled_for <= datetime('now')", async (err, emails) => {
         if (err) {
             console.error('Error fetching email queue:', err);
             return;
         }
-        
+
         console.log(`Found ${emails.length} emails to send`);
-        
-        emails.forEach(email => {
-            console.log(`Sending email to contact ${email.contact_id}: ${email.subject}`);
-            sendEmail(email.user_id, email.contact_id, email.subject, email.template);
-            
-            // Mark as sent
-            db.run("UPDATE email_queue SET status = 'sent' WHERE id = ?", [email.id]);
-        });
+
+        for (const email of emails) {
+            try {
+                console.log(`📤 Sending queued email (ID: ${email.id}): ${email.subject}`);
+
+                // Get user for authentication
+                const user = await new Promise((resolve, reject) => {
+                    db.get("SELECT * FROM users WHERE id = ?", [email.user_id], (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    });
+                });
+
+                if (!user || !user.access_token) {
+                    console.error(`❌ User ${email.user_id} not authenticated`);
+                    continue;
+                }
+
+                // Send email using sendDirectEmail (supports threading)
+                const recipient = email.recipient_email || 'unknown';
+                const result = await sendDirectEmail(
+                    user,
+                    recipient,
+                    email.subject,
+                    email.template,
+                    email.thread_id || null,
+                    email.in_reply_to || null
+                );
+
+                console.log(`   ✅ Queued email sent! Message ID: ${result.id}`);
+
+                // Log to email_logs
+                await logSentEmail(
+                    email.user_id,
+                    email.contact_id,
+                    email.cadence_id,
+                    result.messageId,
+                    result.threadId,
+                    email.subject,
+                    recipient,
+                    email.node_id
+                );
+
+                // Mark as sent in queue
+                db.run("UPDATE email_queue SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?", [email.id]);
+
+            } catch (error) {
+                console.error(`❌ Failed to send queued email (ID: ${email.id}):`, error.message);
+                // Don't mark as sent if it failed - it will be retried next cron run
+            }
+        }
     });
 });
 
