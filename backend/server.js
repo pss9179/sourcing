@@ -468,7 +468,7 @@ async function checkForEmailResponses(userId) {
 
                             // Check for scheduling intent and handle automatically
                             try {
-                                await handleSchedulingResponse(userId, from, body, sentEmail.contact_id, sentEmail.thread_id, responseMessageId, yourOriginalMessageId);
+                                await handleSchedulingResponse(userId, from, body, sentEmail.contact_id, sentEmail.thread_id, responseMessageId, yourOriginalMessageId, subject);
                             } catch (schedulingError) {
                                 console.error('❌ Error handling scheduling response:', schedulingError);
                             }
@@ -854,6 +854,118 @@ app.delete('/api/contacts/:id', authenticateToken, (req, res) => {
             res.json({ message: 'Contact deleted successfully' });
         }
     });
+});
+
+// Parse and verify company name using GPT
+app.post('/api/parse-company', authenticateToken, async (req, res) => {
+    const { rawCompanyName, personName, personTitle } = req.body;
+    
+    try {
+        console.log(`🔍 Parsing company name: "${rawCompanyName}" for ${personName} (${personTitle})`);
+        
+        if (!process.env.OPENAI_API_KEY) {
+            return res.json({
+                success: false,
+                error: 'OpenAI API key not configured'
+            });
+        }
+
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY
+        });
+
+        const prompt = `You are a professional data parser specializing in LinkedIn company name extraction and verification.
+
+TASK: Parse and clean the raw company name, then verify if it's a real company.
+
+RAW COMPANY NAME: "${rawCompanyName}"
+PERSON: ${personName}
+TITLE: ${personTitle}
+
+INSTRUCTIONS:
+1. Clean the company name by removing:
+   - Common suffixes like "Inc.", "LLC", "Corp", "Ltd", "Co.", "Company"
+   - Extra words like "at", "and", "the"
+   - Parentheses and extra punctuation
+   - Location names (cities, states, countries)
+
+2. Standardize the name to its most recognizable form
+3. Check if this looks like a real, legitimate company
+4. If it seems like a typo, suggest the most likely correct company name
+
+EXAMPLES:
+- "CEO at Sumitomo Inc." → "Sumitomo"
+- "Software Engineer at Google LLC" → "Google" 
+- "Manager at Apple Inc." → "Apple"
+- "Sumitimo" → "Sumitomo" (typo correction)
+- "Microsoft Corporation" → "Microsoft"
+- "Amazon Web Services" → "Amazon"
+
+RESPOND WITH JSON ONLY:
+{
+  "cleanedName": "The cleaned company name",
+  "isRealCompany": true/false,
+  "confidence": "high/medium/low",
+  "suggestedCorrection": "If typo detected, suggest correct name",
+  "reasoning": "Brief explanation of your decision"
+}`;
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: "You are a professional data parser. Always respond with valid JSON only."
+                },
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ],
+            temperature: 0.1,
+            max_tokens: 300
+        });
+
+        const response = completion.choices[0].message.content.trim();
+        console.log(`🤖 GPT Response: ${response}`);
+        
+        let parsedResponse;
+        try {
+            parsedResponse = JSON.parse(response);
+        } catch (parseError) {
+            console.error('❌ Failed to parse GPT response as JSON:', response);
+            return res.json({
+                success: false,
+                error: 'Failed to parse AI response',
+                fallback: rawCompanyName
+            });
+        }
+
+        // If GPT suggests a correction and has high confidence, use it
+        const finalCompanyName = parsedResponse.suggestedCorrection && 
+                                parsedResponse.confidence === 'high' 
+                                ? parsedResponse.suggestedCorrection 
+                                : parsedResponse.cleanedName;
+
+        console.log(`✅ Final company name: "${finalCompanyName}" (confidence: ${parsedResponse.confidence})`);
+
+        res.json({
+            success: true,
+            originalName: rawCompanyName,
+            cleanedName: finalCompanyName,
+            isRealCompany: parsedResponse.isRealCompany,
+            confidence: parsedResponse.confidence,
+            reasoning: parsedResponse.reasoning
+        });
+
+    } catch (error) {
+        console.error('❌ Error parsing company name:', error);
+        res.json({
+            success: false,
+            error: error.message,
+            fallback: rawCompanyName
+        });
+    }
 });
 
 // Find email using Hunter.io API
@@ -1381,6 +1493,14 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
     
     // Create email with proper MIME format
     const utf8Subject = `=?utf-8?B?${Buffer.from(emailSubject).toString('base64')}?=`;
+    const contentType = detectEmailContentType(body);
+    
+    // Convert plain text to HTML if needed for better Gmail rendering
+    let emailBody = body;
+    if (contentType === 'text/plain') {
+        emailBody = convertTextToHtml(body);
+    }
+    
     const messageParts = [
         `From: ${user.email}`,
         `To: ${to}`,
@@ -1398,8 +1518,12 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
     }
     
     messageParts.push('');
-    messageParts.push(body);
+    messageParts.push(emailBody);
     const message = messageParts.join('\r\n'); // CRITICAL: Use CRLF for MIME
+    
+    // Log the raw message before encoding to verify HTML formatting
+    console.log(`📝 Raw message before encoding (text/html):`);
+    console.log(message);
     
     // Encode message
     const encodedMessage = Buffer.from(message)
@@ -2209,11 +2333,20 @@ Respond with a JSON object containing:
 - suggestedTimes: array of specific times mentioned (if any) in natural language format
 - confidence: number between 0-1
 
-Examples:
+SCHEDULING INDICATORS:
+- "available", "free", "schedule", "meet", "call", "chat", "talk"
+- "tomorrow", "next week", "Monday", "Tuesday", etc.
+- "morning", "afternoon", "evening"
+- "2pm", "10am", "6pm", etc.
+- "when are you free", "what time works", "let's schedule"
+
+EXAMPLES:
 - "I'm available next week" → {"schedulingType": "request_availability", "suggestedTimes": [], "confidence": 0.9}
 - "How about Tuesday at 2pm?" → {"schedulingType": "book_specific_time", "suggestedTimes": ["Tuesday at 2pm"], "confidence": 0.95}
 - "I can do tomorrow morning or Friday afternoon" → {"schedulingType": "book_specific_time", "suggestedTimes": ["tomorrow morning", "Friday afternoon"], "confidence": 0.9}
-- "Thanks for the email" → {"schedulingType": "none", "suggestedTimes": [], "confidence": 0.8}`
+- "Let's schedule a call" → {"schedulingType": "request_availability", "suggestedTimes": [], "confidence": 0.8}
+- "Thanks for the email" → {"schedulingType": "none", "suggestedTimes": [], "confidence": 0.8}
+- "I'm interested but busy this week" → {"schedulingType": "none", "suggestedTimes": [], "confidence": 0.7}`
                     },
                     {
                         role: 'user',
@@ -2317,6 +2450,167 @@ app.get('/api/scheduling/availability', authenticateToken, async (req, res) => {
     }
 });
 
+// Fetch availability from Google Calendar
+app.post('/api/scheduling/availability', authenticateToken, async (req, res) => {
+    try {
+        const { timeRange, timezone = 'EDT' } = req.body;
+        
+        console.log(`📅 Fetching availability for ${timeRange} in ${timezone}`);
+        
+        // Get user's Google OAuth tokens
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [req.user.userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!user || !user.access_token) {
+            return res.status(401).json({ error: 'User not authenticated with Google' });
+        }
+
+        const { google } = require('googleapis');
+        
+        // Create OAuth2 client
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+        // Parse time range and get start/end dates
+        let startDate, endDate;
+        const now = new Date();
+        
+        if (timeRange.toLowerCase().includes('next week')) {
+            // Next week (Monday to Friday)
+            const nextMonday = new Date(now);
+            nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7);
+            nextMonday.setHours(9, 0, 0, 0);
+            
+            const nextFriday = new Date(nextMonday);
+            nextFriday.setDate(nextMonday.getDate() + 4);
+            nextFriday.setHours(17, 0, 0, 0);
+            
+            startDate = nextMonday;
+            endDate = nextFriday;
+        } else if (timeRange.toLowerCase().includes('week of')) {
+            // Extract date from "Week of October 7th" format
+            const dateMatch = timeRange.match(/(\w+)\s+(\d+)(?:st|nd|rd|th)?/i);
+            if (dateMatch) {
+                const month = dateMatch[1];
+                const day = parseInt(dateMatch[2]);
+                const currentYear = now.getFullYear();
+                
+                const monthIndex = new Date(`${month} 1, ${currentYear}`).getMonth();
+                const weekStart = new Date(currentYear, monthIndex, day);
+                weekStart.setHours(9, 0, 0, 0);
+                
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekStart.getDate() + 4);
+                weekEnd.setHours(17, 0, 0, 0);
+                
+                startDate = weekStart;
+                endDate = weekEnd;
+            } else {
+                // Default to next week if parsing fails
+                const nextMonday = new Date(now);
+                nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7);
+                nextMonday.setHours(9, 0, 0, 0);
+                
+                const nextFriday = new Date(nextMonday);
+                nextFriday.setDate(nextMonday.getDate() + 4);
+                nextFriday.setHours(17, 0, 0, 0);
+                
+                startDate = nextMonday;
+                endDate = nextFriday;
+            }
+        } else {
+            // Default to next week
+            const nextMonday = new Date(now);
+            nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7);
+            nextMonday.setHours(9, 0, 0, 0);
+            
+            const nextFriday = new Date(nextMonday);
+            nextFriday.setDate(nextMonday.getDate() + 4);
+            nextFriday.setHours(17, 0, 0, 0);
+            
+            startDate = nextMonday;
+            endDate = nextFriday;
+        }
+
+        // Get busy times from calendar
+        const freeBusyResponse = await calendar.freebusy.query({
+            resource: {
+                timeMin: startDate.toISOString(),
+                timeMax: endDate.toISOString(),
+                items: [{ id: 'primary' }]
+            }
+        });
+
+        const busyTimes = freeBusyResponse.data.calendars.primary.busy || [];
+        
+        // Generate available time slots (9 AM - 5 PM, 30-minute slots)
+        const availableSlots = [];
+        const current = new Date(startDate);
+        
+        while (current < endDate) {
+            const slotStart = new Date(current);
+            const slotEnd = new Date(slotStart.getTime() + 30 * 60000);
+            
+            // Check if this slot conflicts with busy times
+            const isBusy = busyTimes.some(busy => {
+                const busyStart = new Date(busy.start);
+                const busyEnd = new Date(busy.end);
+                return (slotStart < busyEnd && slotEnd > busyStart);
+            });
+            
+            if (!isBusy && slotStart.getHours() >= 9 && slotEnd.getHours() <= 17) {
+                const dayName = slotStart.toLocaleDateString('en-US', { weekday: 'long' });
+                const dateStr = slotStart.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+                const timeStr = slotStart.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit',
+                    hour12: true 
+                });
+                const endTimeStr = slotEnd.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit',
+                    hour12: true 
+                });
+                
+                availableSlots.push({
+                    start: slotStart.toISOString(),
+                    end: slotEnd.toISOString(),
+                    display: `${dayName} (${dateStr}) - ${timeStr} - ${endTimeStr}`
+                });
+            }
+            
+            current.setTime(current.getTime() + 30 * 60000);
+        }
+
+        console.log(`✅ Found ${availableSlots.length} available slots`);
+        
+        res.json({
+            success: true,
+            timeRange: timeRange,
+            timezone: timezone,
+            availableSlots: availableSlots.slice(0, 8) // Limit to 8 slots
+        });
+
+    } catch (error) {
+        console.error('❌ Error fetching availability:', error);
+        res.status(500).json({ error: 'Failed to fetch availability' });
+    }
+});
+
 // Create calendar invite
 app.post('/api/scheduling/create-meeting', authenticateToken, async (req, res) => {
     try {
@@ -2358,7 +2652,7 @@ app.post('/api/scheduling/create-meeting', authenticateToken, async (req, res) =
 
         const event = {
             summary: subject,
-            description: `Meeting with ${contactName}`,
+            description: `Meeting between you and ${contactName}`,
             start: {
                 dateTime: startDateTime.toISOString(),
                 timeZone: 'America/New_York',
@@ -2865,7 +3159,7 @@ function generateAvailableSlots(events, days) {
 }
 
 // Main scheduling response handler
-async function handleSchedulingResponse(userId, fromEmail, responseText, contactId, threadId, responseMessageId, yourOriginalMessageId) {
+async function handleSchedulingResponse(userId, fromEmail, responseText, contactId, threadId, responseMessageId, yourOriginalMessageId, originalSubject) {
     console.log(`🤖 Analyzing scheduling response from ${fromEmail} in thread ${threadId}`);
     
     try {
@@ -2909,13 +3203,13 @@ async function handleSchedulingResponse(userId, fromEmail, responseText, contact
             return;
         }
         
-        // Handle different scheduling types (pass threading info)
+        // Handle different scheduling types (pass threading info and original subject)
         if (analysis.schedulingType === 'request_availability') {
-            await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
+            await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject);
         } else if (analysis.schedulingType === 'book_specific_time') {
-            await handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
+            await handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject);
         } else if (analysis.schedulingType === 'general_scheduling') {
-            await handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
+            await handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject);
         }
         
     } catch (error) {
@@ -2924,15 +3218,64 @@ async function handleSchedulingResponse(userId, fromEmail, responseText, contact
 }
 
 // Handle when someone asks for your availability
-async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
+async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject) {
     console.log(`📅 Handling availability request from ${contact.name} in thread ${threadId}`);
     
     try {
-        // Get your availability
-        const availabilityResponse = await fetch(`http://localhost:3000/api/scheduling/availability?days=14`, {
+        // Extract time range from the response text using GPT
+        const timeRangeResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
             headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `Extract the time range from this availability request. Return a JSON object with:
+- timeRange: "Next Week", "Week of October 7th", "This Week", etc.
+- timezone: "EDT", "PST", "EST", etc. (default to "EDT" if not specified)
+
+Examples:
+- "I'm available next week" → {"timeRange": "Next Week", "timezone": "EDT"}
+- "What's your availability for the week of October 7th?" → {"timeRange": "Week of October 7th", "timezone": "EDT"}
+- "When are you free this week?" → {"timeRange": "This Week", "timezone": "EDT"}
+- "I'm free next week in PST" → {"timeRange": "Next Week", "timezone": "PST"}`
+                    },
+                    {
+                        role: 'user',
+                        content: `Extract time range from: "next week"`
+                    }
+                ],
+                temperature: 0.1
+            })
+        });
+        
+        let timeRange = "Next Week";
+        let timezone = "EDT";
+        
+        if (timeRangeResponse.ok) {
+            const timeRangeData = await timeRangeResponse.json();
+            const parsed = JSON.parse(timeRangeData.choices[0].message.content);
+            timeRange = parsed.timeRange || "Next Week";
+            timezone = parsed.timezone || "EDT";
+        }
+        
+        console.log(`📅 Fetching availability for ${timeRange} in ${timezone}`);
+        
+        // Get your availability using the new GCal API
+        const availabilityResponse = await fetch(`http://localhost:3000/api/scheduling/availability`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${generateTestToken(userId)}`
-            }
+            },
+            body: JSON.stringify({
+                timeRange: timeRange,
+                timezone: timezone
+            })
         });
         
         if (!availabilityResponse.ok) {
@@ -2947,11 +3290,11 @@ async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, t
             return;
         }
         
-        // Generate availability response email
-        const availabilityText = generateAvailabilityEmail(availability.availableSlots, contact.name);
+        // Generate availability response email with proper formatting
+        const availabilityText = generateAvailabilityEmail(availability.availableSlots, contact.name, timeRange, timezone);
         
-        // Send the availability response in thread
-        await sendSchedulingResponse(userId, fromEmail, `Re: Your availability request`, availabilityText, threadId, responseMessageId, yourOriginalMessageId);
+        // Send the availability response in thread using original subject
+        await sendSchedulingResponse(userId, fromEmail, originalSubject, availabilityText, threadId, responseMessageId, yourOriginalMessageId);
         
         console.log(`✅ Availability response sent to ${contact.name} in thread ${threadId}`);
         
@@ -2961,7 +3304,7 @@ async function handleAvailabilityRequest(userId, fromEmail, contact, analysis, t
 }
 
 // Handle when someone suggests a specific time
-async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
+async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject) {
     console.log(`📅 Handling specific time booking from ${contact.name} in thread ${threadId}`);
     
     try {
@@ -2973,13 +3316,21 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
         let calendarEvent = null;
         let meetingTime = null;
         
-                if (suggestedTimes.length > 0) {
-                    // Parse the first suggested time and create a meeting
-                    const timeStr = suggestedTimes[0];
-                    meetingTime = await parseSuggestedTime(timeStr);
-                    
-                    if (meetingTime) {
+        if (suggestedTimes.length > 0) {
+            // Parse the first suggested time and create a meeting
+            const timeStr = suggestedTimes[0];
+            meetingTime = await parseSuggestedTime(timeStr);
+            
+            if (meetingTime) {
                 console.log(`📅 Creating calendar invite for: ${meetingTime.start} - ${meetingTime.end}`);
+                
+                // Get user details for meeting name
+                const user = await new Promise((resolve, reject) => {
+                    db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    });
+                });
                 
                 // Create calendar event
                 const createMeetingResponse = await fetch(`http://localhost:3000/api/scheduling/create-meeting`, {
@@ -2993,7 +3344,7 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
                         contactName: contact.name,
                         startTime: meetingTime.start,
                         endTime: meetingTime.end,
-                        subject: `Meeting with ${contact.name}`
+                        subject: `${user?.name || 'You'} <> ${contact.name} Chat`
                     })
                 });
                 
@@ -3009,12 +3360,16 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
         // Send confirmation with calendar invite details
         let confirmationText;
         if (calendarEvent && meetingTime) {
-            confirmationText = `Hi ${contact.name},\n\nPerfect! I've scheduled our meeting for ${meetingTime.display}.\n\nI've sent you a calendar invite with all the details. Looking forward to speaking with you!\n\nBest regards`;
+            confirmationText = `<p style="margin:0 0 16px; line-height:1.5;">Hi ${contact.name},</p>
+<p style="margin:0 0 16px; line-height:1.5;">Perfect! I've scheduled our meeting for ${meetingTime.display}. I've sent you a calendar invite with all the details. Looking forward to speaking with you!</p>
+<p style="margin:0 0 16px; line-height:1.5;">Best,<br><strong>Pranav</strong></p>`;
         } else {
-            confirmationText = `Hi ${contact.name},\n\nThat time works for me! Let me check my calendar and send you a few specific options.\n\nBest regards`;
+            confirmationText = `<p style="margin:0 0 16px; line-height:1.5;">Hi ${contact.name},</p>
+<p style="margin:0 0 16px; line-height:1.5;">That time works for me! Let me check my calendar and send you a few specific options.</p>
+<p style="margin:0 0 16px; line-height:1.5;">Best,<br><strong>Pranav</strong></p>`;
         }
         
-        await sendSchedulingResponse(userId, fromEmail, `Re: Meeting confirmation`, confirmationText, threadId, responseMessageId, yourOriginalMessageId);
+        await sendSchedulingResponse(userId, fromEmail, originalSubject, confirmationText, threadId, responseMessageId, yourOriginalMessageId);
         
         console.log(`✅ Time confirmation sent to ${contact.name} in thread ${threadId}`);
         
@@ -3024,31 +3379,93 @@ async function handleSpecificTimeBooking(userId, fromEmail, contact, analysis, t
 }
 
 // Handle general scheduling requests
-async function handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId) {
+async function handleGeneralSchedulingRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject) {
     console.log(`📅 Handling general scheduling request from ${contact.name} in thread ${threadId}`);
     
     try {
         // Get availability and send it
-        await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId);
+        await handleAvailabilityRequest(userId, fromEmail, contact, analysis, threadId, responseMessageId, yourOriginalMessageId, originalSubject);
         
     } catch (error) {
         console.error('❌ Error handling general scheduling request:', error);
     }
 }
 
+// Helper function to detect email content type
+function detectEmailContentType(body) {
+    // Check if body contains HTML tags
+    const htmlTagRegex = /<[^>]+>/;
+    return htmlTagRegex.test(body) ? 'text/html' : 'text/plain';
+}
+
+// Helper function to convert plain text to HTML with proper Gmail formatting
+function convertTextToHtml(text) {
+    // Split by double line breaks to create paragraphs
+    const paragraphs = text.split(/\r\n\r\n|\n\n/);
+    
+    return paragraphs.map(paragraph => {
+        // Clean up single line breaks within paragraphs and convert to <br>
+        const cleanParagraph = paragraph.replace(/\r\n|\n/g, '<br>');
+        return `<p style="margin:0 0 16px; line-height:1.5;">${cleanParagraph}</p>`;
+    }).join('');
+}
+
 // Generate availability email text
-function generateAvailabilityEmail(availableSlots, contactName) {
+function generateAvailabilityEmail(availableSlots, contactName, timeRange = "Next Week", timezone = "EDT") {
     const slots = availableSlots.slice(0, 8); // Show first 8 slots
     
-    let emailText = `Hi ${contactName},\n\nThanks for your interest in scheduling a meeting! Here are my available times for the next 2 weeks:\n\n`;
+    let emailHtml = `<p style="margin:0 0 16px; line-height:1.5;">Hi ${contactName},</p>
+<p style="margin:0 0 16px; line-height:1.5;">Thanks for the invitation! I've listed my availability below for ${timeRange.toLowerCase()}. Please let me know if any of these times are unsatisfactory and if so, I would be more than happy to provide further availability that better suits your schedule. Looking forward to chatting!</p>
+<p style="margin:0 0 16px; line-height:1.5;"><strong>${timeRange} (All ${timezone})</strong></p>`;
     
     slots.forEach((slot, index) => {
-        emailText += `${index + 1}. ${slot.display}\n`;
+        emailHtml += `<p style="margin:0 0 16px; line-height:1.5;">${slot.display}</p>`;
     });
     
-    emailText += `\nPlease let me know which time works best for you, and I'll send you a calendar invite!\n\nBest regards`;
+    emailHtml += `<p style="margin:0 0 16px; line-height:1.5;">Best,<br><strong>Pranav</strong></p>`;
     
-    return emailText;
+    return emailHtml;
+}
+
+// Helper function to get the latest inbound message ID from a thread
+async function getLatestInboundMessageId(gmail, threadId, userEmail) {
+    try {
+        console.log(`   🔍 Fetching latest inbound message from thread ${threadId}`);
+        
+        const thread = await gmail.users.threads.get({
+            userId: 'me',
+            id: threadId
+        });
+        
+        const messages = thread.data.messages || [];
+        console.log(`   📬 Thread contains ${messages.length} messages`);
+        
+        // Find the most recent message that's NOT from us
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const message = messages[i];
+            const headers = message.payload.headers;
+            
+            // Get the From header
+            const fromHeader = headers.find(h => h.name === 'From');
+            if (!fromHeader) continue;
+            
+            // Check if this message is NOT from us
+            if (!fromHeader.value.includes(userEmail)) {
+                // Get the Message-ID header
+                const messageIdHeader = headers.find(h => h.name === 'Message-ID');
+                if (messageIdHeader) {
+                    console.log(`   📧 Found latest inbound Message-ID: ${messageIdHeader.value}`);
+                    return messageIdHeader.value;
+                }
+            }
+        }
+        
+        console.log(`   ⚠️ No inbound messages found in thread, using original responseMessageId`);
+        return null;
+    } catch (error) {
+        console.log(`   ❌ Error fetching latest inbound message: ${error.message}`);
+        return null;
+    }
 }
 
 // Send scheduling response email
@@ -3085,6 +3502,10 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
         
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
         
+        // Get the latest inbound message ID for proper threading
+        const latestInboundMessageId = await getLatestInboundMessageId(gmail, originalThreadId, user.email);
+        const messageIdToReplyTo = latestInboundMessageId || responseMessageId;
+        
         // Create email message with proper threading headers
         const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
         const messageParts = [
@@ -3095,16 +3516,20 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
             'Content-Type: text/html; charset=utf-8'
         ];
         
-        // Add threading headers - reply to the incoming email (responseMessageId)
-        if (responseMessageId) {
-            messageParts.push(`In-Reply-To: ${responseMessageId}`);
-            messageParts.push(`References: ${responseMessageId}`);
-            console.log(`   📎 Adding threading headers: In-Reply-To: ${responseMessageId}`);
+        // Add threading headers - reply to the latest inbound message
+        if (messageIdToReplyTo) {
+            messageParts.push(`In-Reply-To: ${messageIdToReplyTo}`);
+            messageParts.push(`References: ${messageIdToReplyTo}`);
+            console.log(`   📎 Adding threading headers: In-Reply-To: ${messageIdToReplyTo}`);
         }
         
         messageParts.push('');
         messageParts.push(body);
         const message = messageParts.join('\r\n'); // Use \r\n for proper MIME format
+        
+        // Log the raw message before encoding to verify HTML formatting
+        console.log(`📝 Raw message before encoding (text/html):`);
+        console.log(message);
         
         const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         
@@ -3148,11 +3573,7 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
 async function parseSuggestedTime(timeStr) {
     console.log(`🕐 Parsing suggested time with GPT: "${timeStr}"`);
 
-    // For "tomorrow" cases, use fallback function to avoid GPT confusion
-    if (timeStr.toLowerCase().includes('tomorrow')) {
-        console.log(`🕐 Using fallback for "tomorrow" case to avoid GPT confusion`);
-        return parseSuggestedTimeFallback(timeStr);
-    }
+    // Let GPT handle all time parsing including tomorrow
 
     try {
         const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -3168,39 +3589,34 @@ async function parseSuggestedTime(timeStr) {
                         role: 'system',
                         content: `You are a time parsing assistant. Convert natural language time expressions into specific calendar times.
 
-IMPORTANT: "tomorrow" means the very next day from today. If today is Monday, "tomorrow" is Tuesday, NOT Wednesday.
+CURRENT CONTEXT: Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (${new Date().toISOString().split('T')[0]})
 
-Given a time expression, return a JSON object with:
-- start: ISO string for the start time (30-minute meeting)
-- end: ISO string for the end time (30 minutes later)
-- display: human-readable format like "Tuesday, Jan 15, 2:00 PM"
+Return ONLY a JSON object with this exact format:
+{
+  "start": "2024-01-15T14:00:00-04:00",
+  "end": "2024-01-15T15:00:00-04:00", 
+  "display": "Monday, January 15th at 2:00 PM EDT"
+}
 
-                                 Rules:
-                                 - If no specific time is mentioned, suggest 2:00 PM
-                                 - If no day is mentioned, use the next business day
-                                 - Always create 30-minute meetings
-                                 - Use current date as reference: ${new Date().toISOString().split('T')[0]} (${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })})
-                                 - "tomorrow" means the NEXT day from today (not day after tomorrow)
-                                 - "day after tomorrow" means the day after tomorrow
-                                 - Be very careful with relative dates - tomorrow is +1 day, not +2 days
-                                 
-                                 Examples (assuming today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}):
-                                 - "Tuesday at 2pm" → specific Tuesday at 2:00 PM
-                                 - "tomorrow morning" → tomorrow at 10:00 AM (next day)
-                                 - "tomorrow 6pm" → tomorrow at 6:00 PM (next day)
-                                 - "tomorrow 6:00 pm EDT" → tomorrow at 6:00 PM EDT (next day)
-                                 - "day after tomorrow" → day after tomorrow at 2:00 PM
-                                 - "next week" → next Monday at 2:00 PM
-                                 - "Friday afternoon" → next Friday at 2:00 PM
-                                 
-                                 CRITICAL: "tomorrow" = next day, "day after tomorrow" = day after next day
-                                 
-                                 If today is Monday, "tomorrow" is Tuesday, NOT Wednesday!
-                                 
-                                 CALCULATION EXAMPLE:
-                                 - Today: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                                 - Tomorrow: ${new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                                 - Day after tomorrow: ${new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`
+RULES:
+- Use EDT timezone (-04:00) for all times
+- Default meeting duration is 1 hour
+- If no specific time mentioned, assume 2:00 PM
+- If only date mentioned, assume 2:00 PM
+- For "tomorrow", calculate the next day
+- For "next Monday/Tuesday/etc", find the next occurrence of that day
+- For "this Friday/Monday/etc", find the next occurrence this week
+- For "morning", use 10:00 AM
+- For "afternoon", use 2:00 PM
+- For "evening", use 6:00 PM
+
+EXAMPLES:
+- "tomorrow at 2pm" → Calculate tomorrow's date at 2:00 PM EDT
+- "next Monday at 10am" → Calculate next Monday at 10:00 AM EDT  
+- "Friday afternoon" → Calculate this Friday at 2:00 PM EDT
+- "Tuesday morning" → Calculate this Tuesday at 10:00 AM EDT
+- "tomorrow morning" → Calculate tomorrow at 10:00 AM EDT
+- "next week Tuesday" → Calculate next Tuesday at 2:00 PM EDT`
                     },
                     {
                         role: 'user',
