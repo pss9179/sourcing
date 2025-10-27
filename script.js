@@ -10,6 +10,7 @@ class WorkflowBuilder {
         this.authToken = window._authToken || null;
         this.user = null;
         this.contacts = [];
+        this.currentCadenceId = null; // Track currently loaded cadence for editing
         this.init();
         console.log('🔧 WorkflowBuilder initialized with token:', this.authToken ? 'YES' : 'NO');
     }
@@ -1380,6 +1381,41 @@ class WorkflowBuilder {
     }
 
     async saveCadence() {
+        // Check if we're editing an existing cadence
+        if (this.currentCadenceId) {
+            const action = confirm('Update existing cadence or save as new?\n\nClick OK to update existing cadence\nClick Cancel to save as new');
+            
+            if (action) {
+                // Update existing cadence
+                try {
+                    const response = await fetch(`http://localhost:3000/api/cadences/${this.currentCadenceId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.authToken}`
+                        },
+                        body: JSON.stringify({
+                            name: prompt('Enter a name for this cadence:', '') || 'Untitled Cadence',
+                            nodes: this.nodes,
+                            connections: this.connections
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        alert('✅ Cadence updated successfully!');
+                        this.currentCadenceId = null; // Clear current cadence ID
+                    } else {
+                        throw new Error('Failed to update cadence');
+                    }
+                } catch (error) {
+                    console.error('Error updating cadence:', error);
+                    alert('❌ Failed to update cadence');
+                }
+                return;
+            }
+        }
+        
+        // Save as new cadence
         const cadenceName = prompt('Enter a name for this cadence:');
         if (!cadenceName) return;
         
@@ -1673,6 +1709,9 @@ class WorkflowBuilder {
         } else if (viewName === 'cadences') {
             console.log('📥 Loading cadences...');
             this.loadCadencesView();
+        } else if (viewName === 'settings') {
+            console.log('📥 Loading settings...');
+            this.loadSettingsView();
         }
     }
     
@@ -1838,6 +1877,9 @@ class WorkflowBuilder {
                             <button class="btn btn-secondary" onclick="event.stopPropagation(); workflowBuilder.viewCadenceContacts(${cadence.id}, '${cadence.name.replace(/'/g, "\\'")}')">
                                 <i class="fas fa-users"></i> View Contacts
                             </button>
+        <button class="btn btn-secondary" onclick="event.stopPropagation(); workflowBuilder.viewCadenceFlow(${cadence.id}, '${cadence.name.replace(/'/g, "\\'")}')">
+            <i class="fas fa-project-diagram"></i> View Steps
+        </button>
                             <button class="btn btn-primary" onclick="event.stopPropagation(); workflowBuilder.loadCadenceById(${cadence.id})">
                                 <i class="fas fa-edit"></i> Edit
                             </button>
@@ -1935,6 +1977,141 @@ class WorkflowBuilder {
             alert('Failed to load contacts');
         }
     }
+
+    // View cadence flow with progress
+    async viewCadenceFlow(cadenceId, cadenceName) {
+        try {
+            console.log('📊 Viewing flow for cadence:', cadenceId);
+            
+            // Fetch cadence details and progress
+            const [cadenceResponse, progressResponse] = await Promise.all([
+                fetch(`http://localhost:3000/api/cadences`, {
+                    headers: { 'Authorization': `Bearer ${this.authToken}` }
+                }),
+                fetch(`http://localhost:3000/api/cadences/${cadenceId}/progress`, {
+                    headers: { 'Authorization': `Bearer ${this.authToken}` }
+                })
+            ]);
+            
+            if (!cadenceResponse.ok || !progressResponse.ok) {
+                throw new Error('Failed to load cadence flow data');
+            }
+            
+            const cadences = await cadenceResponse.json();
+            const progress = await progressResponse.json();
+            const cadence = cadences.find(c => c.id === cadenceId);
+            
+            if (!cadence) {
+                throw new Error('Cadence not found');
+            }
+            
+            const nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
+            
+            // Group contacts by current node
+            const nodeProgress = {};
+            progress.forEach(contact => {
+                const nodeId = contact.current_node_id || 'start';
+                if (!nodeProgress[nodeId]) {
+                    nodeProgress[nodeId] = [];
+                }
+                nodeProgress[nodeId].push(contact);
+            });
+            
+            // Create modal to show flow progress
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);
+                display: flex; align-items: center; justify-content: center; z-index: 10000;
+            `;
+            
+            const flowSteps = nodes.map((node, index) => {
+                const contactCount = nodeProgress[node.id] ? nodeProgress[node.id].length : 0;
+                const stepNumber = index + 1;
+                
+                return `
+                    <div style="
+                        background: ${contactCount > 0 ? '#f0f9ff' : '#f9fafb'};
+                        border: 2px solid ${contactCount > 0 ? '#3b82f6' : '#e5e7eb'};
+                        border-radius: 12px;
+                        padding: 20px;
+                        margin-bottom: 15px;
+                        position: relative;
+                    ">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="font-weight: 600; color: #1f2937; margin-bottom: 5px;">
+                                    Step ${stepNumber}: ${node.type === 'start' ? 'Start' : node.type === 'email' ? 'Email' : node.type}
+                                </div>
+                                ${node.config && node.config.subject ? `
+                                    <div style="font-size: 14px; color: #6b7280;">
+                                        Subject: ${node.config.subject}
+                                    </div>
+                                ` : ''}
+                            </div>
+                            <div style="
+                                background: ${contactCount > 0 ? '#3b82f6' : '#9ca3af'};
+                                color: white;
+                                padding: 8px 16px;
+                                border-radius: 20px;
+                                font-weight: 600;
+                                font-size: 14px;
+                            ">
+                                ${contactCount} Contact${contactCount !== 1 ? 's' : ''}
+                            </div>
+                        </div>
+                        ${contactCount > 0 ? `
+                            <div style="margin-top: 10px; font-size: 13px; color: #6b7280;">
+                                Contacts: ${nodeProgress[node.id].map(c => c.contact_name).join(', ')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            modal.innerHTML = `
+                <div style="
+                    background: white;
+                    border-radius: 16px;
+                    padding: 30px;
+                    max-width: 800px;
+                    width: 90%;
+                    max-height: 80vh;
+                    overflow-y: auto;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 style="margin: 0; font-size: 22px; color: #1f2937;">
+                            <i class="fas fa-project-diagram"></i> ${cadenceName} Flow
+                        </h3>
+                        <button onclick="this.closest('div[style*=fixed]').remove()" style="
+                            background: none;
+                            border: none;
+                            font-size: 24px;
+                            color: #6b7280;
+                            cursor: pointer;
+                            padding: 5px 10px;
+                        ">&times;</button>
+                    </div>
+                    <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
+                        Flow progress showing where contacts are in the cadence
+                    </p>
+                    ${flowSteps}
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Close on backdrop click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) modal.remove();
+            });
+            
+        } catch (error) {
+            console.error('Error viewing cadence flow:', error);
+            alert('Failed to load flow progress');
+        }
+    }
     
     // Load specific cadence by ID
     async loadCadenceWithContact(cadenceId, contact) {
@@ -1956,6 +2133,7 @@ class WorkflowBuilder {
             console.log('🎯 Found cadence:', cadence);
             
             if (cadence) {
+                this.currentCadenceId = cadenceId; // Set current cadence ID for editing
                 // Load the cadence nodes and connections
                 this.nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
                 this.connections = typeof cadence.connections === 'string' ? JSON.parse(cadence.connections) : cadence.connections;
@@ -2046,6 +2224,7 @@ class WorkflowBuilder {
             const cadence = cadences.find(c => c.id === cadenceId);
             
             if (cadence) {
+                this.currentCadenceId = cadenceId; // Set current cadence ID for editing
                 this.nodes = typeof cadence.nodes === 'string' ? JSON.parse(cadence.nodes) : cadence.nodes;
                 this.connections = typeof cadence.connections === 'string' ? JSON.parse(cadence.connections) : cadence.connections;
                 this.switchView('builder');
@@ -2064,6 +2243,60 @@ class WorkflowBuilder {
         } catch (error) {
             console.error('Error loading cadence:', error);
             alert('Failed to load cadence');
+        }
+    }
+
+    // Load settings view
+    async loadSettingsView() {
+        try {
+            // Load current settings
+            const response = await fetch('http://localhost:3000/api/settings', {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) throw new Error('Failed to load settings');
+            
+            const settings = await response.json();
+            
+            // Update UI with current settings
+            document.getElementById('aiAutoReplyToggle').checked = settings.ai_auto_reply;
+            document.getElementById('aiDraftModeToggle').checked = settings.ai_draft_mode;
+            
+            // Add event listeners for save button
+            document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
+            
+        } catch (error) {
+            console.error('Error loading settings:', error);
+            alert('Failed to load settings');
+        }
+    }
+
+    // Save settings
+    async saveSettings() {
+        try {
+            const settings = {
+                ai_auto_reply: document.getElementById('aiAutoReplyToggle').checked,
+                ai_draft_mode: document.getElementById('aiDraftModeToggle').checked
+            };
+            
+            const response = await fetch('http://localhost:3000/api/settings', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.authToken}`
+                },
+                body: JSON.stringify(settings)
+            });
+            
+            if (!response.ok) throw new Error('Failed to save settings');
+            
+            alert('✅ Settings saved successfully!');
+            
+        } catch (error) {
+            console.error('Error saving settings:', error);
+            alert('Failed to save settings');
         }
     }
 }

@@ -150,6 +150,37 @@ db.serialize(() => {
 
     // Add node_id column if it doesn't exist (for existing databases)
     db.run(`ALTER TABLE email_logs ADD COLUMN node_id TEXT`, () => {});
+
+    // Cadence contacts table
+    db.run(`CREATE TABLE IF NOT EXISTS cadence_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cadence_id INTEGER,
+        contact_id INTEGER,
+        status TEXT DEFAULT 'active',
+        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (cadence_id) REFERENCES cadences (id),
+        FOREIGN KEY (contact_id) REFERENCES contacts (id)
+    )`);
+
+    // Cadence progress table
+    db.run(`CREATE TABLE IF NOT EXISTS cadence_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cadence_id INTEGER,
+        contact_id INTEGER,
+        current_node_id TEXT,
+        status TEXT DEFAULT 'active',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (cadence_id) REFERENCES cadences (id),
+        FOREIGN KEY (contact_id) REFERENCES contacts (id)
+    )`);
+
+    // User settings table
+    db.run(`CREATE TABLE IF NOT EXISTS user_settings (
+        user_id INTEGER PRIMARY KEY,
+        ai_auto_reply BOOLEAN DEFAULT 1,
+        ai_draft_mode BOOLEAN DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )`);
 });
 
 // Helper function to log sent emails
@@ -728,6 +759,40 @@ app.get('/api/user', authenticateToken, (req, res) => {
     });
 });
 
+// Get user settings
+app.get('/api/settings', authenticateToken, (req, res) => {
+    db.get("SELECT ai_auto_reply, ai_draft_mode FROM user_settings WHERE user_id = ?", [req.user.userId], (err, settings) => {
+        if (err) {
+            console.error('Error getting user settings:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            // Return default settings if none exist
+            const defaultSettings = {
+                ai_auto_reply: true,
+                ai_draft_mode: false
+            };
+            res.json(settings || defaultSettings);
+        }
+    });
+});
+
+// Update user settings
+app.put('/api/settings', authenticateToken, (req, res) => {
+    const { ai_auto_reply, ai_draft_mode } = req.body;
+    
+    db.run(`
+        INSERT OR REPLACE INTO user_settings (user_id, ai_auto_reply, ai_draft_mode)
+        VALUES (?, ?, ?)
+    `, [req.user.userId, ai_auto_reply, ai_draft_mode], function(err) {
+        if (err) {
+            console.error('Error updating user settings:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json({ message: 'Settings updated successfully' });
+        }
+    });
+});
+
 // Save cadence
 app.post('/api/cadences', authenticateToken, (req, res) => {
     const { name, nodes, connections } = req.body;
@@ -739,6 +804,25 @@ app.post('/api/cadences', authenticateToken, (req, res) => {
                 res.status(500).json({ error: 'Failed to save cadence' });
             } else {
                 res.json({ id: this.lastID, message: 'Cadence saved successfully' });
+            }
+        });
+});
+
+// Update cadence
+app.put('/api/cadences/:id', authenticateToken, (req, res) => {
+    const cadenceId = req.params.id;
+    const { name, nodes, connections } = req.body;
+    
+    db.run("UPDATE cadences SET name = ?, nodes = ?, connections = ? WHERE id = ? AND user_id = ?",
+        [name, JSON.stringify(nodes), JSON.stringify(connections), cadenceId, req.user.userId],
+        function(err) {
+            if (err) {
+                console.error('Error updating cadence:', err);
+                res.status(500).json({ error: 'Failed to update cadence' });
+            } else if (this.changes === 0) {
+                res.status(404).json({ error: 'Cadence not found or access denied' });
+            } else {
+                res.json({ message: 'Cadence updated successfully' });
             }
         });
 });
@@ -1067,6 +1151,51 @@ app.get('/api/cadences/:id/contacts', authenticateToken, (req, res) => {
             res.status(500).json({ error: 'Database error' });
         } else {
             res.json(contacts);
+        }
+    });
+});
+
+// Get cadence progress (contacts and their current positions)
+app.get('/api/cadences/:id/progress', authenticateToken, (req, res) => {
+    const cadenceId = req.params.id;
+    
+    db.all(`
+        SELECT 
+            c.id as contact_id,
+            c.name as contact_name,
+            c.email as contact_email,
+            cp.current_node_id,
+            cp.status as progress_status,
+            cp.updated_at
+        FROM contacts c
+        INNER JOIN cadence_contacts cc ON c.id = cc.contact_id
+        LEFT JOIN cadence_progress cp ON c.id = cp.contact_id AND cp.cadence_id = ?
+        WHERE cc.cadence_id = ? AND c.user_id = ?
+        ORDER BY cp.updated_at DESC
+    `, [cadenceId, cadenceId, req.user.userId], (err, progress) => {
+        if (err) {
+            console.error('Error getting cadence progress:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json(progress);
+        }
+    });
+});
+
+// Update contact progress in cadence
+app.post('/api/cadences/:id/progress', authenticateToken, (req, res) => {
+    const cadenceId = req.params.id;
+    const { contactId, currentNodeId, status = 'active' } = req.body;
+    
+    db.run(`
+        INSERT OR REPLACE INTO cadence_progress (cadence_id, contact_id, current_node_id, status, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [cadenceId, contactId, currentNodeId, status], function(err) {
+        if (err) {
+            console.error('Error updating cadence progress:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json({ message: 'Progress updated successfully' });
         }
     });
 });
@@ -1410,6 +1539,20 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
 
                 // Log the sent email
                 await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, emailSubject, email.to, email.node.id);
+                
+                // Update progress tracking
+                if (contact && cadenceId) {
+                    await new Promise((resolve, reject) => {
+                        db.run(`
+                            INSERT OR REPLACE INTO cadence_progress (cadence_id, contact_id, current_node_id, status, updated_at)
+                            VALUES (?, ?, ?, 'active', CURRENT_TIMESTAMP)
+                        `, [cadenceId, contact.id, email.node.id], function(err) {
+                            if (err) reject(err);
+                            else resolve();
+                        });
+                    });
+                }
+                
                 results.emailsSent++;
             } catch (error) {
                 console.error(`   ❌ Failed to send email: ${error.message}`);
@@ -1458,6 +1601,19 @@ async function processWorkflowExecution(nodes, connections, startNode, userId, c
 
                     // Log the sent email
                     await logSentEmail(userId, contact ? contact.id : null, cadenceId, result.messageId, result.threadId, capturedSubject, email.to, email.node.id);
+                    
+                    // Update progress tracking
+                    if (contact && cadenceId) {
+                        await new Promise((resolve, reject) => {
+                            db.run(`
+                                INSERT OR REPLACE INTO cadence_progress (cadence_id, contact_id, current_node_id, status, updated_at)
+                                VALUES (?, ?, ?, 'active', CURRENT_TIMESTAMP)
+                            `, [cadenceId, contact.id, email.node.id], function(err) {
+                                if (err) reject(err);
+                                else resolve();
+                            });
+                        });
+                    }
                 } catch (error) {
                     console.error(`   ❌ Failed to send scheduled email: ${error.message}`);
                 }
@@ -1488,8 +1644,8 @@ async function sendDirectEmail(user, to, subject, body, threadId = null, inReply
     
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
-    // Add "Re:" prefix for follow-up emails
-    const emailSubject = (threadId && !subject.startsWith('Re:')) ? `Re: ${subject}` : subject;
+    // Use exact subject as passed (no "Re:" prefix)
+    const emailSubject = subject;
     
     // Create email with proper MIME format
     const utf8Subject = `=?utf-8?B?${Buffer.from(emailSubject).toString('base64')}?=`;
@@ -1671,6 +1827,12 @@ function scheduleEmailForNode(cadenceId, contactId, node, userId, delayDays) {
     
     // Convert to SQLite datetime format
     const sqliteDateTime = scheduledFor.toISOString().replace('T', ' ').replace('Z', '');
+    
+    // For the first email step (delayDays === 0), create a Gmail draft
+    if (delayDays === 0) {
+        console.log(`📝 Creating Gmail draft for first email step`);
+        createGmailDraftForCadence(userId, contactId, node, cadenceId);
+    }
     
     db.run("INSERT INTO email_queue (user_id, contact_id, cadence_id, node_id, subject, template, scheduled_for) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [userId, contactId, cadenceId, node.id, node.config?.subject || 'No Subject', node.config?.template || '', sqliteDateTime],
@@ -3176,6 +3338,27 @@ async function handleSchedulingResponse(userId, fromEmail, responseText, contact
             return;
         }
         
+        // Check user settings for AI auto-reply
+        const userSettings = await new Promise((resolve, reject) => {
+            db.get("SELECT ai_auto_reply, ai_draft_mode FROM user_settings WHERE user_id = ?", [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        // Default to auto-reply ON, draft mode OFF if no settings exist
+        const isDraftMode = userSettings?.ai_draft_mode === 1;
+        const autoReplyEnabled = userSettings?.ai_auto_reply !== 0; // null/undefined = enabled
+        
+        console.log('🔍 User settings for AI response:', userSettings);
+        console.log('🔍 Auto-reply enabled?', autoReplyEnabled);
+        console.log('🔍 Draft mode enabled?', isDraftMode);
+        
+        if (!autoReplyEnabled) {
+            console.log('🤖 AI auto-reply disabled, skipping scheduling response');
+            return;
+        }
+        
         // Analyze the response for scheduling intent
         const analysisResponse = await fetch(`http://localhost:3000/api/scheduling/analyze-response`, {
             method: 'POST',
@@ -3486,6 +3669,24 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
             return;
         }
         
+        // Check user settings for draft mode
+        const userSettings = await new Promise((resolve, reject) => {
+            db.get("SELECT ai_draft_mode FROM user_settings WHERE user_id = ?", [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        console.log('🔍 User settings for draft mode:', userSettings);
+        const isDraftMode = userSettings && userSettings.ai_draft_mode === 1;
+        console.log('🔍 Is draft mode enabled?', isDraftMode);
+        
+        if (isDraftMode) {
+            console.log('📝 Draft mode enabled, creating draft instead of sending');
+            await createGmailDraft(user, toEmail, subject, body, originalThreadId, responseMessageId, yourOriginalMessageId);
+            return;
+        }
+        
         // Send the email using Gmail API
         const { google } = require('googleapis');
         
@@ -3566,6 +3767,162 @@ async function sendSchedulingResponse(userId, toEmail, subject, body, originalTh
         
     } catch (error) {
         console.error('❌ Error sending scheduling response:', error);
+    }
+}
+
+// Create Gmail draft for scheduled emails
+async function createGmailDraft(user, toEmail, subject, body, originalThreadId, responseMessageId, yourOriginalMessageId) {
+    try {
+        console.log(`📝 Creating Gmail draft for ${toEmail} in thread ${originalThreadId}`);
+        
+        const { google } = require('googleapis');
+        
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+        
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+        
+        // Get the latest inbound message ID for proper threading
+        const latestInboundMessageId = await getLatestInboundMessageId(gmail, originalThreadId, user.email);
+        const messageIdToReplyTo = latestInboundMessageId || responseMessageId;
+        
+        // Create email message with proper threading headers
+        const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+        const messageParts = [
+            `From: ${user.email}`,
+            `To: ${toEmail}`,
+            `Subject: ${utf8Subject}`,
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=utf-8'
+        ];
+        
+        // Add threading headers - reply to the latest inbound message
+        if (messageIdToReplyTo) {
+            messageParts.push(`In-Reply-To: ${messageIdToReplyTo}`);
+            messageParts.push(`References: ${messageIdToReplyTo}`);
+            console.log(`   📎 Adding threading headers: In-Reply-To: ${messageIdToReplyTo}`);
+        }
+        
+        messageParts.push('');
+        messageParts.push(body);
+        const message = messageParts.join('\r\n'); // Use \r\n for proper MIME format
+        
+        // Log the raw message before encoding to verify HTML formatting
+        console.log(`📝 Raw draft message before encoding (text/html):`);
+        console.log(message);
+        
+        const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        
+        const result = await gmail.users.drafts.create({
+            userId: 'me',
+            requestBody: {
+                message: {
+                    raw: encodedMessage,
+                    threadId: originalThreadId
+                }
+            }
+        });
+        
+        console.log(`✅ Gmail draft created! Draft ID: ${result.data.id}, Thread ID: ${result.data.message.threadId}`);
+        
+    } catch (error) {
+        console.error('❌ Error creating Gmail draft:', error);
+    }
+}
+
+// Create Gmail draft for cadence first email step
+async function createGmailDraftForCadence(userId, contactId, node, cadenceId) {
+    try {
+        console.log(`📝 Creating Gmail draft for cadence first email step`);
+        
+        // Get user details
+        const user = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!user || !user.access_token) {
+            console.log('❌ User not authenticated for creating Gmail draft');
+            return;
+        }
+        
+        // Get contact details
+        const contact = await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM contacts WHERE id = ? AND user_id = ?", [contactId, userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+        
+        if (!contact) {
+            console.log('❌ Contact not found for Gmail draft');
+            return;
+        }
+        
+        const { google } = require('googleapis');
+        
+        const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+        
+        oauth2Client.setCredentials({
+            access_token: user.access_token,
+            refresh_token: user.refresh_token
+        });
+        
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+        
+        // Create email message
+        const subject = node.config?.subject || 'No Subject';
+        const template = node.config?.template || '';
+        
+        // Convert template to HTML if it's plain text
+        const htmlBody = template.includes('<p') ? template : convertTextToHtml(template);
+        
+        const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+        const messageParts = [
+            `From: ${user.email}`,
+            `To: ${contact.email}`,
+            `Subject: ${utf8Subject}`,
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=utf-8',
+            '',
+            htmlBody
+        ];
+        
+        const message = messageParts.join('\r\n');
+        
+        // Log the raw message before encoding
+        console.log(`📝 Raw cadence draft message before encoding (text/html):`);
+        console.log(message);
+        
+        const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        
+        const result = await gmail.users.drafts.create({
+            userId: 'me',
+            requestBody: {
+                message: {
+                    raw: encodedMessage
+                }
+            }
+        });
+        
+        console.log(`✅ Gmail draft created for cadence! Draft ID: ${result.data.id}`);
+        
+    } catch (error) {
+        console.error('❌ Error creating Gmail draft for cadence:', error);
     }
 }
 

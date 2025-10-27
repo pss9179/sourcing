@@ -68,7 +68,22 @@ async function initializeExtension() {
 
 async function populateProfileData() {
     document.getElementById('profileName').textContent = profileData.fullName || '-';
-    document.getElementById('profileCompany').textContent = profileData.company || '-';
+    
+    // Show company with GPT parsing results
+    const companyElement = document.getElementById('profileCompany');
+    if (profileData.companyParsed) {
+        const confidenceIcon = profileData.companyConfidence === 'high' ? '✅' : 
+                              profileData.companyConfidence === 'medium' ? '⚠️' : '❓';
+        const realCompanyIcon = profileData.companyIsReal ? '🏢' : '❓';
+        companyElement.innerHTML = `${confidenceIcon} ${realCompanyIcon} ${profileData.company}`;
+        
+        if (profileData.rawCompany !== profileData.company) {
+            companyElement.title = `Original: "${profileData.rawCompany}" → Parsed: "${profileData.company}"`;
+        }
+    } else {
+        companyElement.textContent = profileData.company || '-';
+    }
+    
     document.getElementById('profileTitle').textContent = profileData.title || '-';
     
     const emailInput = document.getElementById('emailInput');

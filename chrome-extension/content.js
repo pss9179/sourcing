@@ -3,7 +3,7 @@
 console.log('🚀 CadenceFlow LinkedIn Extension Loaded');
 
 // Function to extract profile data from LinkedIn
-function extractLinkedInData() {
+async function extractLinkedInData() {
     const data = {
         firstName: '',
         lastName: '',
@@ -12,7 +12,8 @@ function extractLinkedInData() {
         companyDomain: '',
         title: '',
         email: '',
-        linkedinUrl: window.location.href
+        linkedinUrl: window.location.href,
+        rawCompany: '' // Store original company name before GPT processing
     };
 
     try {
@@ -43,16 +44,61 @@ function extractLinkedInData() {
                     data.title = parts[0].trim();
                     // Get everything after @ but before any comma
                     const companyPart = parts[1].split(',')[0].trim();
-                    data.company = companyPart;
+                    data.rawCompany = companyPart; // Store raw company name
+                    data.company = companyPart; // Will be updated by GPT
                     break;
                 }
                 // Parse "Title at Company" format
                 else if (text.includes(' at ')) {
                     const parts = text.split(' at ');
                     data.title = parts[0].trim();
-                    data.company = parts[1].split(',')[0].trim();
+                    data.rawCompany = parts[1].split(',')[0].trim(); // Store raw company name
+                    data.company = parts[1].split(',')[0].trim(); // Will be updated by GPT
                     break;
                 }
+            }
+        }
+
+        // Use GPT to parse and verify company name
+        if (data.rawCompany && data.fullName && data.title) {
+            try {
+                console.log(`🤖 Sending company name to GPT for parsing: "${data.rawCompany}"`);
+                
+                const response = await fetch('http://localhost:3000/api/parse-company', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+                    },
+                    body: JSON.stringify({
+                        rawCompanyName: data.rawCompany,
+                        personName: data.fullName,
+                        personTitle: data.title
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        console.log(`✅ GPT parsed company: "${result.originalName}" → "${result.cleanedName}"`);
+                        console.log(`📊 Confidence: ${result.confidence}, Real Company: ${result.isRealCompany}`);
+                        console.log(`💭 Reasoning: ${result.reasoning}`);
+                        
+                        data.company = result.cleanedName;
+                        data.companyParsed = true;
+                        data.companyConfidence = result.confidence;
+                        data.companyIsReal = result.isRealCompany;
+                    } else {
+                        console.log(`⚠️ GPT parsing failed: ${result.error}, using original: "${data.rawCompany}"`);
+                        data.companyParsed = false;
+                    }
+                } else {
+                    console.log(`⚠️ GPT API error: ${response.status}, using original: "${data.rawCompany}"`);
+                    data.companyParsed = false;
+                }
+            } catch (error) {
+                console.log(`⚠️ GPT parsing error: ${error.message}, using original: "${data.rawCompany}"`);
+                data.companyParsed = false;
             }
         }
 
@@ -108,8 +154,14 @@ function extractLinkedInData() {
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getProfileData') {
-        const data = extractLinkedInData();
-        sendResponse({ success: true, data: data });
+        // Handle async function properly
+        extractLinkedInData().then(data => {
+            sendResponse({ success: true, data: data });
+        }).catch(error => {
+            console.error('❌ Error extracting LinkedIn data:', error);
+            sendResponse({ success: false, error: error.message });
+        });
+        return true; // Keep message channel open for async response
     }
     return true;
 });

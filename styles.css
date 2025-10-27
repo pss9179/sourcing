@@ -1248,6 +1248,21 @@ body {
     color: #ef4444;
 }
 
+/* Glow effect for current step in cadence flow */
+.workflow-node.current-step {
+    animation: glow-pulse 2s ease-in-out infinite;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.8);
+}
+
+@keyframes glow-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 20px rgba(59, 130, 246, 0.8);
+    }
+    50% { 
+        box-shadow: 0 0 30px rgba(59, 130, 246, 1);
+    }
+}
+
 .reply-info {
     margin-top: 12px;
     padding: 12px;

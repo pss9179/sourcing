@@ -1,0 +1,55 @@
+THREADING FIX SEQUENCE - Key Messages from User
+
+==========================================
+MESSAGE 1 - User provided Stack Overflow info:
+==========================================
+
+still not doing it correctly its sernding saying RE: but not sending properly, here is some logic that could help - Hi Everyone, For a while now, I've been pining for a 'Draft Response' kind of module for Gmail, in which a draft would be created within an existing email conversation. To note, Zapier already has this and it works perfectly. This would be so useful for integrating AI to generate responses that're 90% ready to send. Currently, the Gmail module can only generate a fresh draft - you would need to copy and paste the content into the desired conversation. Anyway, I came across a reddit post whereby the user stubbled across the built-in Email module pretty much having this functionality already. The caveat I've found, however, is that it doesn't seem to work from the first initial email. An initial response is needed to generate a conversation (or so it seems) before the 'Create a Draft' module (using 'In-Reply-To') can latch into the conversation. Otherwise, the first draft is made up, but not in the conversation. To echo the reddit user, I found trying the HTTP OAuth 2.0 module path too complicated for my understanding and gave up on that avenue. This would be far simpler and easier to utilise. My question is, can anyone think of a clever workaround / solution to being able to draft a response to that initial email? Below is a very basic blueprint of how the scenario would essentially work. blueprint.json (12.4 KB) Thanks in advance! So, from what I can tell, the first In-Reply-To references the Message ID. You can see this by sending an email to your Gmail account and sending a reply. Then, click on the three dots for each message in Gmail and choose "See original." The very first line at the top shows the message ID. If you… 1.4k views 7 likes 14 links L_Duperval Insider ⭐⭐ Nov 2024 I have a comment and a question. If the Oauth aspect is the biggest challenge, look for @samliew's responses to that… One of them is here: Hi Sam Thank you for the quick response! I clicked "confirm", but now it wants to verify the app. Will entering the business home page and a privacy policy link be enough? Kind regards bettina [image] My question: what is not working from the reddit post? In-Reply-To means that there was an email to reply to. I'm trying to understand why you would want to have that in the first email of the thread. Normally, that only appears in the second email in a thread, i.e. a response. L and Skip to content Navigation Menu googleapis google-api-nodejs-client Type / to search Code Issues 209 Pull requests Discussions Actions Projects Security Insights send email on same thread. #710 Closed Closed send email on same thread. #710 @dg92 Description dg92 opened on Feb 18, 2017 I have received a successful response of a email using gmail.users.messages.send() which is like { "id": "1231212312", "labelIds": ["UNREAD", "SENT", "INBOX"], "threadId": "23123123" } I need to send an email again to the same email addr <omitted />
+
+==========================================
+MESSAGE 2 - User provided Python Gmail API info:
+==========================================
+
+not in the same thread still, think about how you store and save things. here is some help info - Sending a reply with Gmail API Python Asked 2 years, 3 months ago Modified 10 months ago Viewed 3k times Report this ad 3 I created two Gmail accounts and I'm trying to create an e-mail thread between them with the Python Gmail API. I can send e-mails without any issue, but when it comes to replying to each other and creating a thread, it is simply not working : the new message is successfully displaying as the answer of the received email for the sender, but it is appearing as a new message - without a linked thread - for the receiver. This problem was described here in 2019 : https://stackoverflow.com/a/63186609/21966625 However, the Gmail APIs changed a lot since this article and I didn't find how to use these advices with today's API. I tried to carefully respect the instructions of the docs by defining the message's parameters References and In-Reply-To as the received message's id when replying. Indeed, I retrieve the email : received_email= service.users().messages().get(userId='me', id=label['id']).execute() I get a dict looking like: {'id': '189462395f418017', 'threadId': '189462395f418017', 'labelIds': ['UNREAD','INBOX'], 'snippet': 'xxx'....} Hence, when I'm building my e-mail, the following method should work : message_id=received_email['id'] message = EmailMessage() message.set_content('') message['To'] = 'john.doe@gmail.com' message['From'] = 'john.doe@gmail.com' message['References'] = message_id message['In-Reply-To'] = message_id message['Subject'] = 'Automated draft' In the same way, I defined the threadId as the id of the message I wanted to reply to. create_message = {'raw': encoded_message, 'threadId': message_id } send_message = (service.users().messages().send(userId="me", body=create_message).execute()) Thanks to this part of the code, the answers are correctly displayed (for the sender of the answer) as explained above, but it appears as a new message - unlinked to a thread - for the receiver. pythongmailgmail-apigoogle-api-python-client Share Improve this question Follow edited Jul 11, 2023 at 18:18 asked Jul 11, 2023 at 16:54 ibra's user avatar ibra 13611 silver badge99 bronze badges Add a comment 3 Answers Sorted by: Highest score (default) 5 Actually I found why my method did not work ; even if the dict mention a kind of message id : email = {'id': '189462395f418017', 'threadId': '189462395f418017', 'labelIds': ['UNREAD','INBOX'], 'snippet': 'xxx'....} I thought the messageIDcould be taken just by call email['id']. The real messageID is somewhere in the ['payload']['headers'] dictionnary ; one could find it by a loop like : for p in email['payload']['headers']: if p["name"] == "Message-Id": message_id = p['value'] This way we have the true messageID of the email, and the threads are successfully created. Share Improve this answer Follow edited Dec 16, 2024 <omitted />
+
+==========================================
+KEY INSIGHT FROM STACK OVERFLOW ANSWER:
+==========================================
+
+"The real messageID is somewhere in the ['payload']['headers'] dictionary; 
+one could find it by a loop like: 
+for p in email['payload']['headers']: 
+    if p["name"] == "Message-Id": 
+        message_id = p['value']"
+
+This way we have the true messageID of the email, and the threads are successfully created.
+
+==========================================
+USER CONFIRMATION MESSAGES:
+==========================================
+
+MESSAGE 3:
+amazing, the one thing is that it's not working with replying in thread, why cant you look at the logic for our prior cadences and how you figured out how to thread those?
+
+MESSAGE 4:
+it is not replying in the thread, how did you do it for the cadences but you cant now?
+
+MESSAGE 5:
+amazing, the one thing is that it's not working with replying in thread, why cant you look at the logic for our prior cadences and how you figured out how to thread those?
+
+==========================================
+MISSING MESSAGE - USER CONFIRMED CADENCE THREADING WAS FIXED:
+==========================================
+
+[NOTE: The specific message where you confirmed that cadence follow-up threading was working after the fix is not found in the current search. This message would have been something like "it's working now" or "cadence threading is fixed" or similar confirmation that the cadence follow-up emails were properly threading after I applied the Message-ID fix.]
+
+==========================================
+WHAT THIS LED TO:
+==========================================
+
+This Stack Overflow insight led to fixing the cadence follow-up threading by:
+1. Using the actual Message-ID from email headers instead of Gmail API's internal id field
+2. Extracting Message-ID from payload.headers with: headers.find(h => h.name === 'Message-ID')?.value
+3. This made cadence follow-ups thread correctly
+
+The same principle was then applied to fix AI response threading in the recent fix.

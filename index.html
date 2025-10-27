@@ -44,6 +44,9 @@
                         <button class="nav-tab" data-view="contacts">
                             <i class="fas fa-users"></i> Contacts
                         </button>
+                        <button class="nav-tab" data-view="settings">
+                            <i class="fas fa-cog"></i> Settings
+                        </button>
                     </div>
                 </div>
             <div class="header-actions">
@@ -124,6 +127,43 @@
                         </button>
                     </div>
                     <div id="contactsList"></div>
+                </div>
+            </div>
+            
+            <!-- Settings View -->
+            <div class="view-content" id="settingsView" data-view="settings" style="display: none; padding: 40px; overflow-y: auto;">
+                <div style="max-width: 1200px; margin: 0 auto;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                        <h2 style="margin: 0; font-size: 28px; color: #1f2937;">
+                            <i class="fas fa-cog"></i> Settings
+                        </h2>
+                    </div>
+                    <div id="settingsContent">
+                        <div style="background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <h3 style="margin: 0 0 20px 0; color: #1f2937;">AI Response Settings</h3>
+                            <div style="margin-bottom: 20px;">
+                                <label style="display: flex; align-items: center; gap: 10px; font-weight: 500; color: #374151;">
+                                    <input type="checkbox" id="aiAutoReplyToggle" style="transform: scale(1.2);">
+                                    Auto AI Replies
+                                </label>
+                                <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 14px;">
+                                    Allow AI to automatically respond to incoming emails
+                                </p>
+                            </div>
+                            <div style="margin-bottom: 20px;">
+                                <label style="display: flex; align-items: center; gap: 10px; font-weight: 500; color: #374151;">
+                                    <input type="checkbox" id="aiDraftModeToggle" style="transform: scale(1.2);">
+                                    Draft Mode
+                                </label>
+                                <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 14px;">
+                                    AI creates drafts instead of sending emails automatically
+                                </p>
+                            </div>
+                            <button class="btn btn-primary" id="saveSettingsBtn">
+                                <i class="fas fa-save"></i> Save Settings
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
